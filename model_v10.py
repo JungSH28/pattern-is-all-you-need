@@ -48,6 +48,8 @@ class SparsePatternLMv10(nn.Module):
         decay: float = 0.99,
         rec_gain: float = 1.0,
         beta_v: float = 0.01,      # 도파민 기준선(V) EMA 속도
+        rpe_scale: float = 0.1,    # δ 상수 정규화 (수렴 시 satiate; 적응 S와 달리 δ→0)
+        w_max: float = 1.0,        # 시냅스 포화 경계 (최대 전도도) 안전망
     ):
         super().__init__()
         assert N > vocab_size
@@ -68,6 +70,8 @@ class SparsePatternLMv10(nn.Module):
         self.decay = decay
         self.rec_gain = rec_gain
         self.beta_v = beta_v
+        self.rpe_scale = rpe_scale
+        self.w_max = w_max
 
         anchor = torch.zeros(vocab_size, N)
         for v in range(vocab_size):
@@ -82,7 +86,6 @@ class SparsePatternLMv10(nn.Module):
 
         self.register_buffer("theta", torch.full((N,), float(theta_init)))
         self.register_buffer("V", torch.tensor(1.0 / vocab_size))   # 도파민 기준선(평균보상)
-        self.register_buffer("S", torch.tensor(1.0 / vocab_size))   # 보상 변동성(적응 스케일)
 
     def new_state(self, B: int, device) -> torch.Tensor:
         return torch.zeros(B, self.N, device=device)
@@ -112,26 +115,30 @@ class SparsePatternLMv10(nn.Module):
 
     @torch.no_grad()
     def r_stdp(self, pre: torch.Tensor, next_ids: torch.Tensor) -> torch.Tensor:
-        """three-factor 도파민 규칙. dW = δ · (pre ⊗ anchor[next]).
-        pre=문맥상태 h_t, next_ids=실제 다음토큰.
-        eligibility = pre ⊗ anchor[next] (실현 공동활성, post=k0-hot 희소).
-        δ = (p(correct) − V)/(S+ε) 표준화 bipolar RPE. V=평균보상 EMA,
-        S=변동성 EMA(도파민 적응 스케일) → δ를 O(1)로 만들어 콜드스타트 가능.
-        return: 평균 reward p(correct) (모니터링)."""
+        """토큰공간 delta rule × 도파민. dW = (pre·(1+δ)).T @ (err_vocab @ anchor).
+        err_vocab = onehot(next) − softmax(logits): 출력층(percept) 예측오차.
+            합~0 → all-negative 드리프트 불가. p→onehot이면 →0 자기제한.
+            LTD는 확률질량 있는 경쟁 토큰에만 분산 (전체 침묵노드 blanket 아님 = v9 뿌리 제거).
+        err_nodes = err_vocab @ anchor: 오차를 노드공간으로 역투영 (예측코딩 피드백).
+        δ = (r−V)/c 도파민 변조 (three-factor).
+        return: 평균 reward p(correct)."""
         B = pre.shape[0]
-        logits = self.drive_logits(pre)                          # (B, V)
+        logits = (pre @ self.W) @ self.anchor.t()                # (B, V) readout
         p = torch.softmax(logits, dim=1)
-        r = p[torch.arange(B, device=p.device), next_ids]        # (B,) reward=p(correct)
-        delta = (r - self.V) / (self.S + 1e-8)                   # (B,) 표준화 RPE
+        idx = torch.arange(B, device=p.device)
+        r = p[idx, next_ids]                                     # (B,) reward=p(correct)
+        delta = (r - self.V) / self.rpe_scale                    # (B,) 도파민 RPE
         self.V += self.beta_v * (r.mean() - self.V)              # 평균 EMA
-        self.S += self.beta_v * ((r - self.V).abs().mean() - self.S)  # 변동성 EMA
 
-        post = self.anchor[next_ids]                             # (B, N) 실현 post (희소)
-        gated_pre = pre * delta.unsqueeze(1)                     # δ 게이팅 (±)
-        dW = gated_pre.t() @ post / B                            # eligibility × δ
+        err_vocab = -p                                           # (B, V)
+        err_vocab[idx, next_ids] += 1.0                          # onehot − p (자기제한·합0)
+        err_nodes = err_vocab @ self.anchor                      # (B, N) 역투영
+        gate = (1.0 + delta).clamp(min=0.0).unsqueeze(1)         # 도파민 가소성 게이트
+        dW = (pre * gate).t() @ err_nodes / B                    # 토큰공간 delta × 도파민
         self.W.mul_(self.decay)
         self.W.add_(self.stdp_lr * dW)
         self.W.fill_diagonal_(0.0)
+        self.W.clamp_(-self.w_max, self.w_max)                   # 시냅스 포화 경계
         self.W[self.W.abs() < 1e-3] = 0.0                        # 대사 가지치기
         return r.mean()
 

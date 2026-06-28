@@ -1,0 +1,13 @@
+`trust_remote_code` is not supported anymore.
+Please check that the Hugging Face dataset 'Salesforce/wikitext' isn't based on a loading script and remove `trust_remote_code`.
+If the dataset is based on a loading script, please ask the dataset author to remove it and convert it to a standard format like Parquet.
+params=912592 (0.9M)
+epoch 1 : val ppl=58
+epoch 2 : val ppl=52
+epoch 3 : val ppl=49
+epoch 4 : val ppl=47
+epoch 5 : val ppl=46
+epoch 6 : val ppl=45
+epoch 7 : val ppl=44
+epoch 8 : val ppl=44
+(우리 bigram v11=63 / unigram125)

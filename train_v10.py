@@ -3,6 +3,7 @@
 문맥상태 h_t → 실현 다음토큰 anchor로, δ=p(correct)−V 게이팅(양·음).
 v9 dense-LTD 음수쏠림(drive 붕괴) 회피 목표. W_neg 모니터.
 """
+import math
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
@@ -12,7 +13,7 @@ from model_v10 import SparsePatternLMv10
 
 VOCAB, N = 2000, 4000
 EPOCHS, BS, SEQ = 4, 32, 16
-CFG = dict(rho=0.06, gamma=4, theta_init=0.3, k0=20, eta_homeo=0.02)
+CFG = dict(rho=0.06, gamma=4, theta_init=0.3, k0=20, eta_homeo=0.02, stdp_lr=0.05, decay=0.99)
 
 
 @torch.no_grad()
@@ -53,13 +54,15 @@ def main():
         vl = evaluate(model, val_batches, device)
         nz = (model.W.abs() > 1e-4).float().mean().item()
         neg = (model.W < 0).float().mean().item()
-        print(f"epoch {epoch} | val={vl:.3f} ppl={2.718**vl:.0f} | W_nz={nz:.3f} W_neg={neg:.3f} | "
-              f"theta={model.theta.mean().item():.2f} | reward={rsum/rn:.4f} V={model.V.item():.4f}")
         if vl < best:
             best = vl
             torch.save({"W": model.W, "theta": model.theta, "anchor": model.anchor,
                         "V": model.V, "cfg": CFG}, "model_v10_best.pt")
-    print(f"best val={best:.3f} ppl={2.718**best:.0f}")
+        ppl = math.exp(vl) if vl < 700 else float("inf")
+        print(f"epoch {epoch} | val={vl:.3f} ppl={ppl:.0f} | W_nz={nz:.3f} W_neg={neg:.3f} | "
+              f"theta={model.theta.mean().item():.2f} | reward={rsum/rn:.4f} V={model.V.item():.4f}")
+    bppl = math.exp(best) if best < 700 else float("inf")
+    print(f"best val={best:.3f} ppl={bppl:.0f}")
 
 
 if __name__ == "__main__":
