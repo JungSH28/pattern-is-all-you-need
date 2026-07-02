@@ -160,12 +160,20 @@ class ReasoningLMv12(nn.Module):
         return {"nz": frac_nz, "neg": frac_neg, "neg_of_nz": frac_neg / (frac_nz + 1e-9)}
 
     @torch.no_grad()
-    def assembly_overlap(self, token_ids: torch.Tensor, device) -> torch.Tensor:
+    def assembly_overlap(self, token_ids: torch.Tensor, device, free: int = 0) -> torch.Tensor:
         """관련 단어가 겹치는 이성 상태로 수렴하나(cat~dog, 원 목표).
         각 토큰 단독 think 후 상태들의 쌍별 cos. 평균 낮으면 분화(좋음),
-        붕괴면 1에 가까움(v9 drive cos 0.988 = 붕괴)."""
+        붕괴면 1에 가까움(v9 drive cos 0.988 = 붕괴).
+
+        승현 진단: think()는 매 내부스텝 anchor를 재주입 → h가 무작위 직교 입력에
+          지배당해 이성층 수렴을 못 잰다(입력 코드끼리 cos≈0이 상태 cos를 고정).
+          free>0 이면 입력 주입 후 free 스텝 무입력 자유진행(재귀 동역학만) → 이성층
+          고유 수렴을 측정. (경고: 전부음수 W_rec는 free_run서 단일 전역 attractor로
+          붕괴 = sim/random 무관하게 cos→1. 그것이 진짜 실패 신호.)"""
         h = self.new_state(len(token_ids), device)
         h = self.think(h, token_ids.to(device))
+        for _ in range(free):
+            h = self._think_step(h, None)                  # 입력 제거, 재귀만
         hn = F.normalize(h, dim=1)
         return hn @ hn.t()                                 # (n, n) cos 행렬
 
