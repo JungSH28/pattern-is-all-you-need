@@ -90,13 +90,30 @@ sparse code  →   fixed-random routing      →   Hebbian/local readout
 |---|---|---|
 | Ours (frozen-attn, backprop E/head) | 5 epoch (수렴) | **96.8** |
 | 동일크기 transformer | 10 / 20 / 25 epoch | 128.6 / 92.9 / 87.2 |
-| Ours (fully-bio, DFA) | 8 epoch | 192.5 (하락중) |
+| Ours (fully-bio, DFA) | 15 epoch | 160.5 (하락중) |
 
 - **효율 우위:** ours는 5 epoch에 96.8 도달, transformer는 20 epoch 필요(≈4~5× 학습 효율). ppl *천장*은
   transformer가 낮으나(87.2), *같은 계산당 성능*은 ours가 앞선다 — "GPT 낭비 우회" 논지와 연결.
-- **완전-bio 비용:** DFA(backprop 없음)는 192(2× 격차), 그래도 대화는 유지.
+- **완전-bio 비용:** DFA(backprop 없음)는 160(15ep, ~1.7× 격차, 하락중), 공감 레지스터는 유지하나
+  backprop보다 거침(`<unk>`·반복↑). 격차 좁히기 두 시도 모두 실패: (a) 구조화
+  피드백(sign-concordant, 직접 경로) 169.8 ≈ random 169.1; (b) attention-mix 경로까지 credit 라우팅
+  (full-path DFA) 199.1 — *오히려 악화*(무작위 피드백 행렬을 더할수록 신호 아닌 노이즈 증가). → **격차는
+  "credit 경로 누락"이 아니라 random-feedback credit의 본질적 근사 한계.** feedback 조정으로는 못 좁히며,
+  근본적으로 더 나은 bio credit(predictive coding·target propagation 등, 분야 미제)이 필요.
 - **지표 한계:** ppl은 lookup 편향 지표(count 표가 동역학을 이긴다). sanity check용이며, 사고/동역학 가치는
   별도 축(장거리·조합·연속학습·내부구조 RSA)이 필요.
+
+**효율 정직한 정량화** (`efficiency.py`, `dialogue_sparse.py`):
+- per-token FLOP: 우리 822k ≈ tf 1.17M (둘 다 vocab readout head가 지배, dense면 큰 차이 없음).
+- 진짜 우위: ①학습 파라미터 적음(라우팅 고정) ②4~5× 빠른 수렴 ③backprop 없음(DFA, forward 위주).
+- **sparsity 복원(중요):** 대화모델은 학습 dense 임베딩을 써서 density 0.69였다(sparse 원칙 이탈). feat에
+  top-k 강제로 sparse 복원: density 0.06(k=8/128, 뇌 발화율 ~5% 수준)에서도 대화 유지, 비용은 ppl
+  105→227(~2.2×). feat 6% 활성 → 지배적 head 계산 ~11× 절감 = sparse-coding 에너지/정확도 tradeoff
+  (뉴로모픽 가치). 효율 우위는 dense가 아니라 **sparse 강제 + 학습효율**에서 나온다.
+- **sparse를 유전 prior로 + threshold 발화(`dialogue_adaptive_sparse.py`):** 하드 top-k 대신 **threshold
+  발화**(입력>θ, θ는 항상성으로 목표 발화율 ρ 유지) = 뉴런식 발화 + 자연 변동 k. density 0.10, ppl 207 —
+  **고정 top-k(228)보다 우수**(강한 유닛은 살리고 약한 것만 죽임). k는 입력마다 변동(std 0.06)하나 난이도와
+  상관 없음(+0.015). = 설계 원칙 "sparse는 학습으로 창발하지 않고 유전 prior(항상성 threshold)로 부여"의 구현.
 
 **대화 샘플** (backprop 모델, `gen_saved.py`):
 
