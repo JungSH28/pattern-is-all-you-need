@@ -1,0 +1,29 @@
+`trust_remote_code` is not supported anymore.
+Please check that the Hugging Face dataset 'Salesforce/wikitext' isn't based on a loading script and remove `trust_remote_code`.
+If the dataset is based on a loading script, please ask the dataset author to remove it and convert it to a standard format like Parquet.
+baselines: additive 61.8 | softmax-attn 58.6 | frozen-attn 56.8 (prior sessions)
+this run 2026-07-06 pass1: add 62.1 | gate(diag self) 60.4 | attn 57.4
+this run 2026-07-06 pass2: cmpgate 60.2 | matmul 60.5 (non-commutative alone doesn't close gap)
+this run 2026-07-06 pass3: divnorm(n=1) 59.7, divnorm(n=2) 59.4 best, divnorm(n=4) 59.8
+pass5: recurrent lateral inhibition (Grossberg shunting, settles over iters, not 1-shot div)
+lateral  n=1 beta=0.3 it=5 ep 1 ppl=69.9
+lateral  n=1 beta=0.3 it=5 ep 2 ppl=64.4
+lateral  n=1 beta=0.3 it=5 ep 3 ppl=63.3
+lateral  n=1 beta=0.3 it=5 ep 4 ppl=63.0
+lateral  n=1 beta=0.3 it=5 ep 5 ppl=62.8
+lateral  n=1 beta=0.3 it=5 ep 6 ppl=62.6
+lateral  n=1 beta=0.3 it=5 ep 7 ppl=61.9
+lateral  n=1 beta=0.3 it=5 ep 8 ppl=61.9
+lateral  n=1 beta=0.3 it=5 ep 9 ppl=61.8
+lateral  n=1 beta=0.3 it=5 ep10 ppl=62.4
+lateral  n=1 beta=0.3 it=5 ep11 ppl=62.7
+lateral  n=1 beta=0.3 it=5 ep12 ppl=61.8
+  -> lateral n=1 beta=0.3 it=5 params=0.40M BEST=61.8
+lateral  n=1 beta=0.7 it=5 ep 1 ppl=69.8
+lateral  n=1 beta=0.7 it=5 ep 2 ppl=65.1
+lateral  n=1 beta=0.7 it=5 ep 3 ppl=63.9
+lateral  n=1 beta=0.7 it=5 ep 4 ppl=63.4
+lateral  n=1 beta=0.7 it=5 ep 5 ppl=63.1
+lateral  n=1 beta=0.7 it=5 ep 6 ppl=62.9
+/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/multiprocessing/resource_tracker.py:324: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown: {'/mp-w0cpl6g2'}
+  warnings.warn(

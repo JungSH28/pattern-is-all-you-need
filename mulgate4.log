@@ -1,0 +1,37 @@
+`trust_remote_code` is not supported anymore.
+Please check that the Hugging Face dataset 'Salesforce/wikitext' isn't based on a loading script and remove `trust_remote_code`.
+If the dataset is based on a loading script, please ask the dataset author to remove it and convert it to a standard format like Parquet.
+baselines: additive 61.8 | softmax-attn 58.6 | frozen-attn 56.8 (prior sessions)
+this run 2026-07-06 pass1: add 62.1 | gate(diag self) 60.4 | attn 57.4
+this run 2026-07-06 pass2: cmpgate 60.2 | matmul 60.5 (non-commutative alone doesn't close gap)
+this run 2026-07-06 pass3: divnorm(n=1) 59.7 (linear ratio, best non-softmax so far)
+pass4: divnorm power-law exponent n=2,4 (Carandini&Heeger canonical form, not n=1)
+divnorm n=2 ep 1 ppl=66.6
+divnorm n=2 ep 2 ppl=62.1
+divnorm n=2 ep 3 ppl=59.9
+divnorm n=2 ep 4 ppl=59.4
+divnorm n=2 ep 5 ppl=59.4
+divnorm n=2 ep 6 ppl=59.5
+divnorm n=2 ep 7 ppl=59.8
+divnorm n=2 ep 8 ppl=60.3
+divnorm n=2 ep 9 ppl=59.7
+divnorm n=2 ep10 ppl=60.0
+divnorm n=2 ep11 ppl=60.3
+divnorm n=2 ep12 ppl=60.5
+  -> divnorm n=2 params=0.40M BEST=59.4
+divnorm n=4 ep 1 ppl=67.0
+divnorm n=4 ep 2 ppl=62.2
+divnorm n=4 ep 3 ppl=61.2
+divnorm n=4 ep 4 ppl=60.1
+divnorm n=4 ep 5 ppl=59.8
+divnorm n=4 ep 6 ppl=60.0
+divnorm n=4 ep 7 ppl=60.4
+divnorm n=4 ep 8 ppl=60.3
+divnorm n=4 ep 9 ppl=59.9
+divnorm n=4 ep10 ppl=60.1
+divnorm n=4 ep11 ppl=60.4
+divnorm n=4 ep12 ppl=60.2
+  -> divnorm n=4 params=0.40M BEST=59.8
+=== SUMMARY ===
+divnorm_n2 BEST=59.4
+divnorm_n4 BEST=59.8

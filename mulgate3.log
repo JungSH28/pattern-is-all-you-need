@@ -1,0 +1,21 @@
+`trust_remote_code` is not supported anymore.
+Please check that the Hugging Face dataset 'Salesforce/wikitext' isn't based on a loading script and remove `trust_remote_code`.
+If the dataset is based on a loading script, please ask the dataset author to remove it and convert it to a standard format like Parquet.
+baselines: additive 61.8 | softmax-attn 58.6 | frozen-attn 56.8 (prior sessions)
+this run 2026-07-06 pass1: add 62.1 | gate(diag self) 60.4 | attn 57.4
+this run 2026-07-06 pass2: cmpgate 60.2 | matmul 60.5 (non-commutative alone doesn't close gap)
+divnorm ep 1 ppl=65.9
+divnorm ep 2 ppl=61.0
+divnorm ep 3 ppl=59.8
+divnorm ep 4 ppl=59.7
+divnorm ep 5 ppl=59.9
+divnorm ep 6 ppl=60.7
+divnorm ep 7 ppl=60.8
+divnorm ep 8 ppl=61.4
+divnorm ep 9 ppl=62.1
+divnorm ep10 ppl=61.0
+divnorm ep11 ppl=61.4
+divnorm ep12 ppl=61.1
+  -> divnorm params=0.40M BEST=59.7
+=== SUMMARY ===
+divnorm BEST=59.7

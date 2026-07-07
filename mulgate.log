@@ -1,0 +1,47 @@
+`trust_remote_code` is not supported anymore.
+Please check that the Hugging Face dataset 'Salesforce/wikitext' isn't based on a loading script and remove `trust_remote_code`.
+If the dataset is based on a loading script, please ask the dataset author to remove it and convert it to a standard format like Parquet.
+baselines: additive 61.8 | softmax-attn 58.6 | frozen-attn 56.8 (prior sessions)
+add    ep 1 ppl=65.1
+add    ep 2 ppl=63.3
+add    ep 3 ppl=63.0
+add    ep 4 ppl=63.1
+add    ep 5 ppl=63.2
+add    ep 6 ppl=62.8
+add    ep 7 ppl=62.7
+add    ep 8 ppl=62.6
+add    ep 9 ppl=62.9
+add    ep10 ppl=62.3
+add    ep11 ppl=62.2
+add    ep12 ppl=62.1
+  -> add params=0.42M BEST=62.1
+gate   ep 1 ppl=64.4
+gate   ep 2 ppl=61.7
+gate   ep 3 ppl=60.8
+gate   ep 4 ppl=60.8
+gate   ep 5 ppl=60.4
+gate   ep 6 ppl=60.8
+gate   ep 7 ppl=61.2
+gate   ep 8 ppl=61.1
+gate   ep 9 ppl=61.2
+gate   ep10 ppl=60.6
+gate   ep11 ppl=61.2
+gate   ep12 ppl=61.5
+  -> gate params=0.39M BEST=60.4
+attn   ep 1 ppl=65.3
+attn   ep 2 ppl=60.0
+attn   ep 3 ppl=58.6
+attn   ep 4 ppl=57.8
+attn   ep 5 ppl=57.8
+attn   ep 6 ppl=57.4
+attn   ep 7 ppl=57.6
+attn   ep 8 ppl=57.6
+attn   ep 9 ppl=57.9
+attn   ep10 ppl=57.8
+attn   ep11 ppl=58.3
+attn   ep12 ppl=58.2
+  -> attn params=0.40M BEST=57.4
+=== SUMMARY ===
+add    BEST=62.1
+gate   BEST=60.4
+attn   BEST=57.4
