@@ -20,7 +20,7 @@ tb, vb, vocab, w2i = load_wikitext2(max_vocab=VOCAB, seq_len=16, batch_size=32)
 
 
 class Combiner(nn.Module):
-    def __init__(self, mode, n=1, beta=0.5, iters=5):
+    def __init__(self, mode, n=1, beta=0.5, iters=5, dt=1.0):
         super().__init__()
         self.mode = mode
         self.n = n  # divisive-norm exponent (Heeger 1992 / Carandini&Heeger 2012 canonical form has n~2,
@@ -28,6 +28,9 @@ class Combiner(nn.Module):
                     # nonlinearity that's the actual bio mechanism for sharp competition, not softmax-mimicry.
         self.beta = beta    # lateral inhibition strength (Grossberg shunting on-center off-surround)
         self.iters = iters  # recurrent settling steps (real circuit doesn't normalize in one shot)
+        self.dt = dt        # euler step size for leaky integration; dt=1.0 = original (no decay, full
+                             # replace each step); dt<1 = partial step w/ leak (-x term), closer to real
+                             # continuous shunting dynamics, may avoid overshoot/oscillation.
         self.E = nn.Embedding(VOCAB, d)
         if mode == "attn":
             self.Wq = nn.Linear(d, d, bias=False)
@@ -66,6 +69,18 @@ class Combiner(nn.Module):
             self.Bg = nn.Linear(d, r)
             self.A = nn.Linear(r, d, bias=False)
             self.Win = nn.Linear(d, d, bias=False)
+        elif mode == "phase":
+            # theta-gamma / binding-by-synchrony analogue (Fries 2005 communication-through-coherence;
+            # von der Malsburg binding-by-synchrony) -- NOT a normalization mechanism, unlike every
+            # other non-add mode above (softmax/divnorm/lateral all divide by a window-wide sum).
+            # each token's coupling strength is gated purely by ITS OWN content-match phase via
+            # Malus's law (cos^2), no cross-token normalization: w_j = cos(phi_j)^2, phi_j in [0,pi/2]
+            # set by (query,key_j) match. High match -> phi->0 (in-phase, strong coupling); low match
+            # -> phi->pi/2 (out-of-phase, decoupled). mix = sum_j w_j*v_j, NOT divided by sum(w) --
+            # amplitude summation of coherent oscillators, not a competitive ratio.
+            self.Wq = nn.Linear(d, d, bias=False)
+            self.Wk = nn.Linear(d, d, bias=False)
+            self.Wv = nn.Linear(d, d, bias=False)
         else:
             raise ValueError(mode)
         self.head = nn.Linear(2 * d, VOCAB, bias=False)
@@ -100,14 +115,18 @@ class Combiner(nn.Module):
             w = p / (p.sum(1, keepdim=True) + 1.0 ** self.n)       # sigma=1
             mix = (w.unsqueeze(-1) * v).sum(1)
         elif self.mode == "lateral":  # recurrent mutual inhibition settling, not one-shot division
+            # improvement: drive raised to n before settling -- divnorm ablation showed the n~2
+            # expansive nonlinearity (not the ratio/settling shape) is what recovers most of the gap,
+            # so combine both bio ingredients: expansive drive + recurrent shunting settling.
             q = self.Wq(cur).unsqueeze(1)
             k = self.Wk(emb)
             v = self.Wv(emb)
-            raw = F.relu((q * k).sum(-1) / math.sqrt(d))     # (B,K) drive
+            raw = F.relu((q * k).sum(-1) / math.sqrt(d)) ** self.n   # (B,K) expansive drive
             x = raw.clone()
             for _ in range(self.iters):
                 S = x.sum(1, keepdim=True)
-                x = F.relu(raw - self.beta * (S - x))
+                target = F.relu(raw - self.beta * (S - x))
+                x = x + self.dt * (target - x)   # dt=1 -> x=target (original); dt<1 -> leaky partial step
             w = x / (x.sum(1, keepdim=True) + 1.0)
             mix = (w.unsqueeze(-1) * v).sum(1)
         elif self.mode == "cmpgate":  # gate from comparing cur against each folded-in token
@@ -119,7 +138,7 @@ class Combiner(nn.Module):
                 g = torch.sigmoid(score)
                 h = g * h + self.Win(tok)
             mix = h
-        else:  # matmul: low-rank matrix transition, cross-dim mixing via bottleneck
+        elif self.mode == "matmul":  # low-rank matrix transition, cross-dim mixing via bottleneck
             h = torch.zeros_like(cur)
             for j in reversed(range(K)):
                 tok = emb[:, j]
@@ -127,6 +146,14 @@ class Combiner(nn.Module):
                 hb = self.C(h)
                 h = self.A(g * hb) + self.Win(tok)
             mix = h
+        else:  # phase: binding-by-synchrony, coherence-gated (NOT normalized) amplitude summation
+            q = self.Wq(cur).unsqueeze(1)
+            k = self.Wk(emb)
+            v = self.Wv(emb)
+            s = (q * k).sum(-1) / math.sqrt(d)                    # (B,K) content-match score
+            phi = (math.pi / 2) * (1 - torch.sigmoid(self.beta * s))  # high match -> phi->0 (in-phase)
+            w = torch.cos(phi) ** 2                               # Malus's law coherence gain, per-token
+            mix = (w.unsqueeze(-1) * v).sum(1)                    # no sum(w) normalization
         return self.head(torch.cat([cur, F.relu(mix)], -1))
 
 
@@ -143,9 +170,9 @@ trb = batches(tb)
 vbb = batches(vb)
 
 
-def run(mode, n=1, beta=0.5, iters=5):
+def run(mode, n=1, beta=0.5, iters=5, dt=1.0):
     torch.manual_seed(0)
-    m = Combiner(mode, n=n, beta=beta, iters=iters).to(dev)
+    m = Combiner(mode, n=n, beta=beta, iters=iters, dt=dt).to(dev)
     npar = sum(p.numel() for p in m.parameters())
     opt = torch.optim.Adam(m.parameters(), lr=1e-3)
     best = 1e9
@@ -168,8 +195,8 @@ def run(mode, n=1, beta=0.5, iters=5):
                 cnt += len(y)
         ppl = math.exp(tot / cnt)
         best = min(best, ppl)
-        print(f"{mode:8s} n={n} beta={beta} it={iters} ep{ep:2d} ppl={ppl:.1f}", flush=True)
-    print(f"  -> {mode} n={n} beta={beta} it={iters} params={npar/1e6:.2f}M BEST={best:.1f}", flush=True)
+        print(f"{mode:8s} n={n} beta={beta} it={iters} dt={dt} ep{ep:2d} ppl={ppl:.1f}", flush=True)
+    print(f"  -> {mode} n={n} beta={beta} it={iters} dt={dt} params={npar/1e6:.2f}M BEST={best:.1f}", flush=True)
     return best
 
 
@@ -178,9 +205,18 @@ print("this run 2026-07-06 pass1: add 62.1 | gate(diag self) 60.4 | attn 57.4", 
 print("this run 2026-07-06 pass2: cmpgate 60.2 | matmul 60.5 (non-commutative alone doesn't close gap)", flush=True)
 print("this run 2026-07-06 pass3: divnorm(n=1) 59.7, divnorm(n=2) 59.4 best, divnorm(n=4) 59.8", flush=True)
 print("pass5: recurrent lateral inhibition (Grossberg shunting, settles over iters, not 1-shot div)", flush=True)
+print("prior interrupted run: lateral n=1 beta=0.3 = 61.8 (worse than divnorm 59.4)", flush=True)
+print("pass6 (dt=1, one-shot replace): lateral_n1_b0.7=62.7, lateral_n2_b0.3=61.2 best, lateral_n2_b0.7=62.7", flush=True)
+print("-> still below divnorm 59.4. pass7: euler leaky integration (dt<1, partial step w/ decay)", flush=True)
+print("   on best config (n=2, beta=0.3) to test if gradual settling beats one-shot replace", flush=True)
+print("pass7 result: dt=0.3->59.8(best) dt=0.5->62.1 dt=0.7->61.6 dt=1.0->60.9 -- ALL below 59.4.", flush=True)
+print("   normalization family (gate/cmpgate/matmul/divnorm/lateral) ceiling confirmed ~59.4.", flush=True)
+print("pass8: phase mode -- binding-by-synchrony (Fries communication-through-coherence), NOT a", flush=True)
+print("   normalization mechanism -- coherence gain w_j=cos(phi_j)^2 has no window-wide sum, unlike", flush=True)
+print("   every mode above. beta = match->phase steepness, sweeping to find working regime.", flush=True)
 results = {}
-for beta in (0.3, 0.7):
-    results[f"lateral_b{beta}"] = run("lateral", beta=beta, iters=5)
+for beta in (0.5, 1.0, 2.0, 4.0):
+    results[f"phase_b{beta}"] = run("phase", beta=beta)
 print("=== SUMMARY ===", flush=True)
 for mode, ppl in results.items():
     print(f"{mode:14s} BEST={ppl:.1f}", flush=True)

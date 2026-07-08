@@ -1,0 +1,74 @@
+`trust_remote_code` is not supported anymore.
+Please check that the Hugging Face dataset 'Salesforce/wikitext' isn't based on a loading script and remove `trust_remote_code`.
+If the dataset is based on a loading script, please ask the dataset author to remove it and convert it to a standard format like Parquet.
+baselines: additive 61.8 | softmax-attn 58.6 | frozen-attn 56.8 (prior sessions)
+this run 2026-07-06 pass1: add 62.1 | gate(diag self) 60.4 | attn 57.4
+this run 2026-07-06 pass2: cmpgate 60.2 | matmul 60.5 (non-commutative alone doesn't close gap)
+this run 2026-07-06 pass3: divnorm(n=1) 59.7, divnorm(n=2) 59.4 best, divnorm(n=4) 59.8
+pass5: recurrent lateral inhibition (Grossberg shunting, settles over iters, not 1-shot div)
+prior interrupted run: lateral n=1 beta=0.3 = 61.8 (worse than divnorm 59.4)
+pass6 (dt=1, one-shot replace): lateral_n1_b0.7=62.7, lateral_n2_b0.3=61.2 best, lateral_n2_b0.7=62.7
+-> still below divnorm 59.4. pass7: euler leaky integration (dt<1, partial step w/ decay)
+   on best config (n=2, beta=0.3) to test if gradual settling beats one-shot replace
+pass7 result: dt=0.3->59.8(best) dt=0.5->62.1 dt=0.7->61.6 dt=1.0->60.9 -- ALL below 59.4.
+   normalization family (gate/cmpgate/matmul/divnorm/lateral) ceiling confirmed ~59.4.
+pass8: phase mode -- binding-by-synchrony (Fries communication-through-coherence), NOT a
+   normalization mechanism -- coherence gain w_j=cos(phi_j)^2 has no window-wide sum, unlike
+   every mode above. beta = match->phase steepness, sweeping to find working regime.
+phase    n=1 beta=0.5 it=5 dt=1.0 ep 1 ppl=61.7
+phase    n=1 beta=0.5 it=5 dt=1.0 ep 2 ppl=59.4
+phase    n=1 beta=0.5 it=5 dt=1.0 ep 3 ppl=58.7
+phase    n=1 beta=0.5 it=5 dt=1.0 ep 4 ppl=58.5
+phase    n=1 beta=0.5 it=5 dt=1.0 ep 5 ppl=58.9
+phase    n=1 beta=0.5 it=5 dt=1.0 ep 6 ppl=58.6
+phase    n=1 beta=0.5 it=5 dt=1.0 ep 7 ppl=58.7
+phase    n=1 beta=0.5 it=5 dt=1.0 ep 8 ppl=58.5
+phase    n=1 beta=0.5 it=5 dt=1.0 ep 9 ppl=58.7
+phase    n=1 beta=0.5 it=5 dt=1.0 ep10 ppl=58.8
+phase    n=1 beta=0.5 it=5 dt=1.0 ep11 ppl=59.4
+phase    n=1 beta=0.5 it=5 dt=1.0 ep12 ppl=59.3
+  -> phase n=1 beta=0.5 it=5 dt=1.0 params=0.40M BEST=58.5
+phase    n=1 beta=1.0 it=5 dt=1.0 ep 1 ppl=62.3
+phase    n=1 beta=1.0 it=5 dt=1.0 ep 2 ppl=59.8
+phase    n=1 beta=1.0 it=5 dt=1.0 ep 3 ppl=59.5
+phase    n=1 beta=1.0 it=5 dt=1.0 ep 4 ppl=59.4
+phase    n=1 beta=1.0 it=5 dt=1.0 ep 5 ppl=59.2
+phase    n=1 beta=1.0 it=5 dt=1.0 ep 6 ppl=59.1
+phase    n=1 beta=1.0 it=5 dt=1.0 ep 7 ppl=58.9
+phase    n=1 beta=1.0 it=5 dt=1.0 ep 8 ppl=59.3
+phase    n=1 beta=1.0 it=5 dt=1.0 ep 9 ppl=59.5
+phase    n=1 beta=1.0 it=5 dt=1.0 ep10 ppl=59.7
+phase    n=1 beta=1.0 it=5 dt=1.0 ep11 ppl=59.8
+phase    n=1 beta=1.0 it=5 dt=1.0 ep12 ppl=60.0
+  -> phase n=1 beta=1.0 it=5 dt=1.0 params=0.40M BEST=58.9
+phase    n=1 beta=2.0 it=5 dt=1.0 ep 1 ppl=62.8
+phase    n=1 beta=2.0 it=5 dt=1.0 ep 2 ppl=59.7
+phase    n=1 beta=2.0 it=5 dt=1.0 ep 3 ppl=58.8
+phase    n=1 beta=2.0 it=5 dt=1.0 ep 4 ppl=59.2
+phase    n=1 beta=2.0 it=5 dt=1.0 ep 5 ppl=58.7
+phase    n=1 beta=2.0 it=5 dt=1.0 ep 6 ppl=58.6
+phase    n=1 beta=2.0 it=5 dt=1.0 ep 7 ppl=58.4
+phase    n=1 beta=2.0 it=5 dt=1.0 ep 8 ppl=58.9
+phase    n=1 beta=2.0 it=5 dt=1.0 ep 9 ppl=59.1
+phase    n=1 beta=2.0 it=5 dt=1.0 ep10 ppl=59.3
+phase    n=1 beta=2.0 it=5 dt=1.0 ep11 ppl=59.4
+phase    n=1 beta=2.0 it=5 dt=1.0 ep12 ppl=59.8
+  -> phase n=1 beta=2.0 it=5 dt=1.0 params=0.40M BEST=58.4
+phase    n=1 beta=4.0 it=5 dt=1.0 ep 1 ppl=70.3
+phase    n=1 beta=4.0 it=5 dt=1.0 ep 2 ppl=64.9
+phase    n=1 beta=4.0 it=5 dt=1.0 ep 3 ppl=62.8
+phase    n=1 beta=4.0 it=5 dt=1.0 ep 4 ppl=62.5
+phase    n=1 beta=4.0 it=5 dt=1.0 ep 5 ppl=62.2
+phase    n=1 beta=4.0 it=5 dt=1.0 ep 6 ppl=62.1
+phase    n=1 beta=4.0 it=5 dt=1.0 ep 7 ppl=62.3
+phase    n=1 beta=4.0 it=5 dt=1.0 ep 8 ppl=62.1
+phase    n=1 beta=4.0 it=5 dt=1.0 ep 9 ppl=62.0
+phase    n=1 beta=4.0 it=5 dt=1.0 ep10 ppl=62.2
+phase    n=1 beta=4.0 it=5 dt=1.0 ep11 ppl=62.5
+phase    n=1 beta=4.0 it=5 dt=1.0 ep12 ppl=62.2
+  -> phase n=1 beta=4.0 it=5 dt=1.0 params=0.40M BEST=62.0
+=== SUMMARY ===
+phase_b0.5     BEST=58.5
+phase_b1.0     BEST=58.9
+phase_b2.0     BEST=58.4
+phase_b4.0     BEST=62.0

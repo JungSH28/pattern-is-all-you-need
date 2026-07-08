@@ -59,6 +59,8 @@ sparse code  →   fixed-random routing      →   Hebbian/local readout
 | v14 | 학습 임베딩 + 비선형 조합 | backprop **55.4** / bio(sign) 64.5 / FA 69 |
 | v15 | attention 레버 규명 | additive 61.8 → attention 58.6 → frozen-routing 56.8 |
 | — | (참고) 동일크기 transformer | 0.42M **53**, 0.9M **44** |
+| — | softmax 대체 탐색(`multiplicative_gate.py`): 승산게이트·비교게이트·행렬혼합·divisive norm·측면억제(dt포함) | 정규화 계열(gate/cmpgate/matmul/divnorm/lateral) 전부 **59.4~62.7 (천장 확정)** — 전부 attn 57.4엔 못 미침 |
+| — | phase(binding-by-synchrony, 정규화 아닌 위상결맞음 게이팅) | beta=2.0 **58.4 최고** — 정규화 계열 천장(59.4) 넘음, attn(57.4)과 격차 2p→1p로 좁힘 |
 
 ---
 
@@ -79,6 +81,11 @@ sparse code  →   fixed-random routing      →   Hebbian/local readout
    (product를 *score*로 써야). 완전 폐쇄(→53)는 transformer 스택 필요 = 비-bio.
 5. **간단한 대화 달성.** 큰 vocab(→ `<unk>` 홍수 제거) + 대화 데이터(empathetic dialogues, 턴마커)로
    frozen-routing 모델이 공감 레지스터로 응답한다. 완전-bio(DFA) 버전도 작동(품질 비용 있음).
+6. **softmax 없는 window 경쟁도 격차를 완전히 못 메운다.** 비가환 결합(승산게이트·비교게이트·행렬혼합,
+   60.2~60.5)은 순서보존은 되나 attn과 격차 그대로 — 원인은 비가환성이 아니라 window 전체 경쟁 정규화
+   부재. divisive normalization(Carandini & Heeger, 실측 지수 n≈2)이 최고 non-softmax(59.4)이나 여전히
+   attn(57.4)에 ~2p 못 미침. **정확한 뇌 정규화 공식도 softmax의 계산력에 못 미친다는 실측 증거** — 값
+   조정(n=1/4)도 실측치(n=2)를 못 이김. 반복적 측면억제(정적 공식 대신 여러 스텝 수렴)가 남은 후보.
 
 ---
 
@@ -133,13 +140,54 @@ BOT : oh wow! i hate that is so i hope he is very painful.
 - **bio = 발판.** 구조를 뇌 부합으로 되게 만든 뒤, 상한 확인엔 backprop을 써도 된다. 최종 목표가 bio-국소.
 - **소스 직접 검증.** 성능 수치·버그는 코드를 돌려 확인 (예: MPS `multinomial`이 범위 밖 인덱스를 반환하는
   버그, 인덱싱 off-by-one, val subset ~1.5% 낙관 편향 — 전부 실행으로 잡음).
+- **공식 이식 2분류.** (a) 형태 유지 + 상수만 조정(예: divnorm n-sweep — 실측 뇌 값 n=2가 조정값보다
+  우수) vs (b) 형태 버리고 뜻만 단순 재현(예: v11 log-Hebbian). 어느 쪽도 항상 우월하지 않음 — 매번 실측
+  필요. top-down 재구성이되 뇌의 정확한 공식을 통째로 이식하진 않는다(GCI의 bottom-up·물리원시 원칙과
+  구분).
+- **공식의 적용 스케일 확인.** 뇌 전반(피질 국소회로) 겨냥 공식을 잘못된 pool 범위에 적용하면 형태가
+  맞아도 붕괴할 수 있다(v9 divisive-readout이 국소 pool 대신 전체 N유닛 평균으로 나눈 사례). 이식 전
+  "이 공식이 원래 요구하는 pool/스케일이 뭔지" 확인할 것.
+- **공식레벨 vs 구조레벨 bio 근거 구분.** 위 항목들은 단일 연산의 수식(공식레벨). 이와 별개로 입력/이성/
+  출력 3분할(Fedorenko, 언어망 vs 추론망)과 콜드-웜-핫 다중시간척도(CLS·Benna-Fusi)는 구조레벨 bio 근거이며
+  독립적으로 유효 — 한쪽(예: softmax 대체) 탐색을 접어도 다른쪽엔 영향 없음.
 
 ---
 
 ## 7. 한계 · 열린 문제
 
 - **bio-국소 attention.** 라우팅 이점을 고정 무작위(reservoir)로 잡았으나 softmax-dot은 완전 bio가 아님.
-  뇌의 binding(theta-gamma 위상부호, 수상돌기 동시검출, 혼합선택성)로의 대체가 미해결.
+  비가환 결합·divisive norm(실측지수 포함, 최고 59.4)·측면억제 다 시도했으나 attn(57.4)과 ~2p 격차 지속 —
+  정규화 계열은 천장에 근접한 것으로 보임. 뇌의 binding(theta-gamma 위상부호, 수상돌기 동시검출)처럼
+  정규화가 아닌 다른 축은 아직 미시도.
+  **다음 갈래 4개(2026-07-08 정리)**:
+  1. 동역학 부활 — 정적 공식 대신 반복수렴(재귀)으로, 이때 국소 pool(단일/군집 뉴런 스케일) vs 뇌 전역
+     식 스케일 구분 후 적용 (design-principles ⑧ 스케일 미스매치 원칙과 연결).
+  2. 공식의 뜻만 유지한 채 단순화해 적용 (⑦-b 계열, 예: v11 log-Hebbian 방식).
+  3. softmax를 non-bio 예외로 그냥 수용 — 정규화 계열 천장(~59) 확인되면 이 프로젝트 본선(대화·효율축)
+     으로 복귀.
+  4. 위상코드(theta-gamma) — 지금까지(divnorm/lateral/gate) 전부 "경쟁 정규화" 계열이었음. 진동 위상으로
+     슬롯 나눠 순서를 인코딩하는, 정규화가 아닌 완전히 다른 축. 결과 예측 불가, 코드 처음부터 새로 작성 필요.
+
+  주의: 1과 2는 배타적 갈림길이 아님 — divnorm(n=2, 59.4)이 이미 둘의 동시적용(K=8 국소pool로 스케일
+  맞춤 + relu·거듭제곱으로 원식 단순화)이었고, lateral+dt 실험도 1을 반복수렴까지 확장한 버전.
+
+  **판정 완료(dt 스윕, n=2/beta=0.3 고정, 오일러 리키적분)**: dt=0.3→59.8(최선) | dt=0.5→62.1 |
+  dt=0.7→61.6 | dt=1.0→60.9. **전부 divnorm 59.4 못 넘음.** 1+2(동역학 갈래) 여기서 막힘 — 정규화
+  계열(gate/cmpgate/matmul/divnorm/lateral 전부) 천장 = **~59.4로 최종 확정**.
+
+  **4(위상코드) 실행 결과 — 돌파.** `phase` 모드 구현: content-match score를 위상 φ∈[0,π/2]로 변환
+  (β=steepness, 높은 매치→φ→0 in-phase), coherence gain w=cos(φ)² (Malus's law)로 게이팅 — **window
+  전체 합으로 정규화하지 않음**(softmax/divnorm/lateral 전부가 공유하던 "경쟁적 정규화" 성질 자체를
+  뺀 것, Fries 2005 communication-through-coherence 유비). β 스윕: 0.5→58.5 | 1.0→58.9 | **2.0→58.4
+  (최고)** | 4.0→62.0(너무 가파름, 이진게이트화되며 붕괴). **정규화 계열 천장(59.4)을 처음으로 넘음
+  — attn(57.4)과 격차 2p→1p로 좁힘, 지금까지 non-attn 최고 기록.** softmax의 핵심이 "정규화"가
+  아니라 "매치 기반 결맞음(비정규화)" 자체였을 가능성 시사. 다음 후보: β 더 세밀 스윕(1.5~2.5),
+  window 전체 상호 결맞음(oscillator population coupling, 지금은 각 토큰 독립 게이팅), n(코히런스
+  지수) sweep.
+
+  **별도 축(구조레벨, design-principles ⑨) — 위 4갈래와 독립, 접어도 서로 안 막힘**: 입력/이성/출력
+  3분할(이미 구현, Fedorenko 언어망-추론망 분리 근거)과 콜드-웜-핫 다중시간척도(부분구현, 웜→콜드 공고화
+  단계 미구현)도 뇌 기전 근거를 가진 별도 고려 대상 — softmax 대체는 공식레벨 실험이라 이쪽엔 영향 없음.
 - **동역학 복귀.** 재귀 이성(v12)은 attractor 용량 문제로 보류. 다중 시간척도(Benna-Fusi)·공고화가 처방
   후보.
 - **신경조절(도파민) 미적용.** three-factor(pre×post×도파민 = 보상/오차 게이팅)는 feedforward 학습에도
