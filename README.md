@@ -61,6 +61,8 @@ sparse code  →   fixed-random routing      →   Hebbian/local readout
 | — | (참고) 동일크기 transformer | 0.42M **53**, 0.9M **44** |
 | — | softmax 대체 탐색(`multiplicative_gate.py`): 승산게이트·비교게이트·행렬혼합·divisive norm·측면억제(dt포함) | 정규화 계열(gate/cmpgate/matmul/divnorm/lateral) 전부 **59.4~62.7 (천장 확정)** — 전부 attn 57.4엔 못 미침 |
 | — | phase(binding-by-synchrony, 정규화 아닌 위상결맞음 게이팅) | beta=2.0 **58.4 최고** — 정규화 계열 천장(59.4) 넘음, attn(57.4)과 격차 2p→1p로 좁힘 |
+| — | phase2(Kuramoto 상호결맞음, window 전체 population coupling) | it=1~8 전부 58.8~59.0 — **개선 없음**, phase 단독(58.4)보다 오히려 약간 나쁨 |
+| — | order_probe.py: window 순서 민감도 구조 검증 | **attn/divnorm/lateral/phase/phase2 전부 순서-blind**(memory 슬롯 뒤바꿔도 출력 완전동일, Δ=0) — add/gate/cmpgate/matmul만 순서 봄. attn 계열 우위는 "순서 활용"이 아니라 "content 기반 경쟁적 선택"이었음이 드러남 |
 
 ---
 
@@ -181,9 +183,22 @@ BOT : oh wow! i hate that is so i hope he is very painful.
   뺀 것, Fries 2005 communication-through-coherence 유비). β 스윕: 0.5→58.5 | 1.0→58.9 | **2.0→58.4
   (최고)** | 4.0→62.0(너무 가파름, 이진게이트화되며 붕괴). **정규화 계열 천장(59.4)을 처음으로 넘음
   — attn(57.4)과 격차 2p→1p로 좁힘, 지금까지 non-attn 최고 기록.** softmax의 핵심이 "정규화"가
-  아니라 "매치 기반 결맞음(비정규화)" 자체였을 가능성 시사. 다음 후보: β 더 세밀 스윕(1.5~2.5),
-  window 전체 상호 결맞음(oscillator population coupling, 지금은 각 토큰 독립 게이팅), n(코히런스
-  지수) sweep.
+  아니라 "매치 기반 결맞음(비정규화)" 자체였을 가능성 시사.
+
+  **phase2(Kuramoto 상호결맞음) 결과 — 개선 없음.** window 토큰끼리 위상을 서로 끌어당기는 진짜
+  population coupling(`coup_ij=tanh(k_i·k_j/√d)` + Kuramoto 갱신, iters 스윕) 구현·실행. it∈{1,3,5,8}
+  전부 **58.8~59.0에 정체** — phase 단독(58.4)보다 오히려 약간 나쁨. coupling 추가가 도움 안 됨.
+
+  **구조 검증(`order_probe.py`, 신규) — 더 큰 발견.** 훈련 없이 순수 구조로: window의 memory 슬롯
+  (위치 1..K-1)을 뒤바꿔도 출력이 바뀌는지 확인. **attn(진짜 softmax attention 포함)·divnorm·
+  lateral·phase·phase2 전부 순서-blind**(Δlogit=0.000000, 부동소수점까지 완전동일) — 이 코드의
+  attn류엔 애초에 positional encoding이 없어서 mix=Σw_j·v_j가 j에 대한 대칭합이 되기 때문(transformer가
+  별도 위치임베딩을 반드시 쓰는 이유의 실측 재현). add/gate/cmpgate/matmul(슬롯별 가중치·재귀)만 순서를
+  봄. **재해석: attn 계열의 우위(divnorm 대비도, attn의 gate 대비 우위도)는 "순서를 더 잘 쓴다"가
+  아니라 "content 기반 경쟁적 선택 방식의 차이"였음** — phase2가 겨냥한 "결맞음=진짜 binding" 전제도
+  이 관점에서 재검토 필요(순서정보 자체가 안 들어가므로). **새 레버 후보**: k_j에 위치신호(고정
+  sinusoidal 등, 유전 prior 원칙과 부합) 추가 — 지금까지 어떤 attn류도 안 써본 축이라 attn(57.4)·
+  phase(58.4) 둘 다 더 낮아질 여지 있음, 미시도.
 
   **별도 축(구조레벨, design-principles ⑨) — 위 4갈래와 독립, 접어도 서로 안 막힘**: 입력/이성/출력
   3분할(이미 구현, Fedorenko 언어망-추론망 분리 근거)과 콜드-웜-핫 다중시간척도(부분구현, 웜→콜드 공고화
