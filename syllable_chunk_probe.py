@@ -22,6 +22,7 @@ from category_memory_output_probe import (
 )
 from syllable_chunk_dialogue import (
     BioLocalSyllableDialogue,
+    ConnectomeSyllableDialogue,
     FunctionalSyllableDialogue,
     syllable_sequence,
 )
@@ -230,7 +231,7 @@ def score(
         predicted, margin, scores = model.answer(
             text, temporal=temporal, controlled=controlled
         )
-        if set(scores) != set(output_vocabulary()):
+        if not set(output_vocabulary()).issubset(scores):
             raise AssertionError("answer did not score the full O-token vocabulary")
         outcomes.append((predicted == target, margin))
     correct = sum(is_correct for is_correct, _ in outcomes)
@@ -256,6 +257,35 @@ def chunk_recall(model, entities: Sequence[str]) -> int:
         model.chunker.pattern_code(syllable_sequence(SURFACE[entity])) is not None
         for entity in entities
     )
+
+
+def fact_episodes(
+    concepts: Mapping[str, Sequence[str]],
+) -> tuple[tuple[tuple[str, tuple[str, ...]], ...], ...]:
+    records = fact_records(concepts)
+    return tuple(
+        tuple(record for record in records if SURFACE[entity] in record[0])
+        for entity in concepts
+    )
+
+
+def score_connectome(
+    model: ConnectomeSyllableDialogue,
+    examples: Sequence[tuple[str, str]],
+    *,
+    controlled: bool = True,
+) -> tuple[int, float]:
+    outcomes = []
+    for text, target in examples:
+        predicted, margin, scores = model.answer(text, controlled=controlled)
+        if not set(output_vocabulary()).issubset(scores):
+            raise AssertionError("answer did not score the full O-token vocabulary")
+        outcomes.append((predicted == target, margin))
+    correct = sum(is_correct for is_correct, _ in outcomes)
+    signed_margin = mean(
+        margin if is_correct else -margin for is_correct, margin in outcomes
+    )
+    return correct, signed_margin
 
 
 @dataclass(frozen=True)
@@ -327,61 +357,90 @@ def functional_result(seed: int) -> SyllableDialogueResult:
 def bio_result(
     seed: int,
     *,
-    fact_rounds: int = 8,
-    answer_rounds: int = 16,
-    later_answer_rounds: int = 20,
-    replay_rounds: int = 2,
+    concept_rounds: int = 30,
+    answer_rounds: int = 30,
+    replay_rounds: int = 6,
 ) -> SyllableDialogueResult:
-    model = BioLocalSyllableDialogue(seed=seed)
+    model = ConnectomeSyllableDialogue(seed=seed)
     model.register_syllable_vocabulary(fixed_syllable_vocabulary_texts())
     model.register_output_vocabulary(output_vocabulary())
     model.observe_streams(stage_streams(CONCEPTS, LABELED))
     model.finalize_chunks()
-    teach_stage(
-        model,
-        CONCEPTS,
-        LABELED,
-        fact_rounds=fact_rounds,
-        answer_rounds=answer_rounds,
-    )
+    for episode in fact_episodes(CONCEPTS):
+        model.observe_fact_episode(episode, rounds=concept_rounds)
+    base_questions = training_questions(LABELED)
+    for iteration in range(answer_rounds):
+        for text, target in base_questions:
+            model.teach_answer(
+                text,
+                target,
+                structural_plasticity=iteration == 0,
+            )
     base_examples = heldout_questions(HELD_OUT)
-    control_ablation, _ = score(model, base_examples, controlled=False)
-    temporal_ablation, _ = score(model, base_examples, temporal=False)
-    reversed_correct = score_reversed(model, base_examples)
+    control_ablation, _ = score_connectome(
+        model, base_examples, controlled=False
+    )
+    # No local transition updates means no recurrent chunks and therefore no
+    # concept episode can form. The control is executed through that failure,
+    # rather than assigning hidden word boundaries to rescue it.
+    no_temporal = ConnectomeSyllableDialogue(seed=seed)
+    no_temporal.register_syllable_vocabulary(fixed_syllable_vocabulary_texts())
+    no_temporal.observe_streams(
+        stage_streams(CONCEPTS, LABELED), temporal=False
+    )
+    no_temporal.finalize_chunks()
+    temporal_ablation = 0
+    try:
+        no_temporal.observe_fact_episode(
+            fact_episodes(CONCEPTS)[0], rounds=concept_rounds
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("no-temporal control formed a concept chunk")
+    del no_temporal
+    reversed_correct = 0
+    for text, target in base_examples:
+        try:
+            reversed_correct += (
+                model.answer(reverse_syllables(text))[0] == target
+            )
+        except RuntimeError:
+            pass
     base_chunks = chunk_recall(model, tuple(CONCEPTS))
 
     lesion = copy.deepcopy(model)
-    lesion.semantic_warm.zero_()
-    lesion.output_warm.zero_()
-    warm_lesion, _ = score(lesion, base_examples)
+    lesion.connectome.warm.zero_()
+    lesion.connectome.state.zero_()
+    warm_lesion, _ = score_connectome(lesion, base_examples)
     del lesion
 
     model.consolidate_and_clear()
-    base_correct, base_margin = score(model, base_examples)
+    base_correct, base_margin = score_connectome(model, base_examples)
 
     model.observe_streams(stage_streams(LATER_CONCEPTS, LATER_LABELED))
     model.finalize_chunks()
-    teach_stage(
-        model,
-        LATER_CONCEPTS,
-        LATER_LABELED,
-        fact_rounds=fact_rounds,
-        answer_rounds=later_answer_rounds,
-    )
-    # Sparse old replay while new material remains dominant.
-    teach_stage(
-        model,
-        CONCEPTS,
-        LABELED,
-        fact_rounds=2,
-        answer_rounds=replay_rounds,
-    )
+    for episode in fact_episodes(LATER_CONCEPTS):
+        model.observe_fact_episode(episode, rounds=concept_rounds)
+    later_questions = training_questions(LATER_LABELED)
+    for iteration in range(answer_rounds):
+        for text, target in later_questions:
+            model.teach_answer(
+                text,
+                target,
+                structural_plasticity=iteration == 0,
+            )
+        if iteration < replay_rounds:
+            for text, target in base_questions:
+                model.teach_answer(text, target, learn_control=False)
     model.consolidate_and_clear()
-    retained_correct, retained_margin = score(model, base_examples)
-    later_correct, _ = score(model, heldout_questions(LATER_HELD_OUT))
+    retained_correct, retained_margin = score_connectome(model, base_examples)
+    later_correct, _ = score_connectome(
+        model, heldout_questions(LATER_HELD_OUT)
+    )
     later_chunks = chunk_recall(model, tuple(LATER_CONCEPTS))
     return SyllableDialogueResult(
-        track="bio_local",
+        track="bio_connectome_local",
         seed=seed,
         base_correct=base_correct,
         control_ablation_correct=control_ablation,
