@@ -728,11 +728,13 @@ class SpatialConnectome:
         learning_rate: float = 0.30,
         settle_steps: int = 2,
         consolidate_every: int = 10,
+        structural_plasticity: bool = True,
     ) -> None:
         """Organize a learned sensory chunk without assigning a token name."""
         sensory = self.expanded_input_pattern(sensory_code)
         target = self.simultaneous_state(properties, steps=settle_steps)
-        self._rewire_concept_inputs(sensory, target)
+        if structural_plasticity:
+            self._rewire_concept_inputs(sensory, target)
         edge = (
             (self.region[self.src] == INPUT)
             & (self.region[self.dst] == SUBSTRATE)
