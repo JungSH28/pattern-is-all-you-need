@@ -40,6 +40,7 @@ class DialogueResult:
     no_answer_learning_correct: int
     cold_lesion_correct: int
     no_structural_correct: int
+    no_replay_retained_correct: int
     retained_correct: int
     later_correct: int
     base_margin: float
@@ -179,6 +180,7 @@ def functional_result(seed: int) -> DialogueResult:
         no_answer_learning_correct=no_learning,
         cold_lesion_correct=-1,
         no_structural_correct=-1,
+        no_replay_retained_correct=-1,
         retained_correct=retained_correct,
         later_correct=later_correct,
         base_margin=base_margin,
@@ -231,6 +233,19 @@ def bio_result(
 
     dialogue.consolidate_and_clear()
     base_correct, base_margin = score_answers(dialogue, base_expected)
+
+    no_replay = copy.deepcopy(dialogue)
+    observe_facts(no_replay, LATER_CONCEPTS)
+    teach_answers(
+        no_replay,
+        LATER_LABELED,
+        rounds=answer_rounds,
+        structural_plasticity=True,
+    )
+    no_replay.consolidate_and_clear()
+    no_replay_retained_correct, _ = score_answers(no_replay, base_expected)
+    del no_replay
+
     observe_facts(dialogue, LATER_CONCEPTS)
     # Interleaved cortical replay: new answers remain the dominant experience,
     # while old query/answer traces are reactivated every fourth round.
@@ -265,6 +280,7 @@ def bio_result(
         no_answer_learning_correct=no_learning,
         cold_lesion_correct=cold_lesion,
         no_structural_correct=no_structural_correct,
+        no_replay_retained_correct=no_replay_retained_correct,
         retained_correct=retained_correct,
         later_correct=later_correct,
         base_margin=base_margin,
@@ -309,7 +325,9 @@ def run_probe(
                     f"gate_off={result.query_gate_ablation_correct}/8 "
                     f"lesion={result.cold_lesion_correct}/8 no_rewire="
                     f"{result.no_structural_correct}/8 retained="
-                    f"{result.retained_correct}/8 later={result.later_correct}/4",
+                    f"{result.retained_correct}/8 no_replay="
+                    f"{result.no_replay_retained_correct}/8 later="
+                    f"{result.later_correct}/4",
                     flush=True,
                 )
 
@@ -330,6 +348,7 @@ def run_probe(
             f"no_learning={mean(r.no_answer_learning_correct for r in group):.2f}/8 "
             f"lesion={mean(r.cold_lesion_correct for r in group):.2f}/8 "
             f"no_rewire={mean(r.no_structural_correct for r in group):.2f}/8 "
+            f"no_replay={mean(r.no_replay_retained_correct for r in group):.2f}/8 "
             f"retained={mean(r.retained_correct for r in group):.2f}/8 "
             f"later={mean(r.later_correct for r in group):.2f}/4 "
             f"margin={mean(r.base_margin for r in group):+.3f}->"
