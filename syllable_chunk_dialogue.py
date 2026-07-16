@@ -688,11 +688,25 @@ class ConnectomeSyllableDialogue:
         return max(present, key=len)
 
     def _control_pattern(self, text: str, entity: tuple[str, ...]) -> torch.Tensor:
+        sequence = syllable_sequence(text)
+        entity_spans = [
+            (start, start + len(entity))
+            for start in _occurrences(sequence, entity)
+        ]
         controls = []
         for pattern, code, _ in self.chunker.matched_codes(text):
             if not 2 <= len(pattern) <= 3:
                 continue
-            if pattern == entity or _occurrences(entity, pattern):
+            pattern_spans = [
+                (start, start + len(pattern))
+                for start in _occurrences(sequence, pattern)
+            ]
+            overlaps_entity = any(
+                pattern_start < entity_end and entity_start < pattern_end
+                for pattern_start, pattern_end in pattern_spans
+                for entity_start, entity_end in entity_spans
+            )
+            if overlaps_entity:
                 continue
             if pattern in self.concept_patterns:
                 continue
