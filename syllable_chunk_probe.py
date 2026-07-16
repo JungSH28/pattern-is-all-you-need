@@ -21,7 +21,6 @@ from category_memory_output_probe import (
     LATER_LABELED,
 )
 from syllable_chunk_dialogue import (
-    BioLocalSyllableDialogue,
     ConnectomeSyllableDialogue,
     FunctionalSyllableDialogue,
     syllable_sequence,
@@ -550,9 +549,10 @@ def verify_goal(
                     "bio_connectome_local: consolidation contribution"
                 )
 
-    audit = BioLocalSyllableDialogue.locality_audit().as_dict()
+    audit = ConnectomeSyllableDialogue.locality_audit().as_dict()
     required_local = {
         "boundary_free_syllable_input",
+        "single_connectome_memory_and_output",
         "local_temporal_synaptic_update",
         "local_semantic_coactivity_update",
         "local_output_pre_post_update",
@@ -561,6 +561,7 @@ def verify_goal(
     }
     required_scaffolds = {
         "global_teacher_target",
+        "global_fact_episode_intersection",
         "global_window_enumeration",
         "global_sparse_activity_competition",
         "global_seed_balancing",
