@@ -29,7 +29,7 @@ from category_generalization_probe import (
     SWAPPED_PROPERTIES,
     make_model,
 )
-from spatial_connectome import SpatialConnectome
+from spatial_connectome import OUTPUT, SUBSTRATE, SpatialConnectome
 
 
 LATER_CONCEPTS = {
@@ -136,7 +136,9 @@ def evaluate(
     model.register_vocabulary(categories)
     no_output_correct, _ = predictions(model, HELD_OUT, categories)
 
-    output_edge = (model.region[model.src] == 1) & (model.region[model.dst] == 2)
+    output_edge = (model.region[model.src] == SUBSTRATE) & (
+        model.region[model.dst] == OUTPUT
+    )
     cold_before = model.cold[output_edge].clone()
     teach_outputs(model, LABELED, rounds=output_rounds)
     warm_correct, _ = predictions(model, HELD_OUT, categories)
@@ -250,6 +252,7 @@ def run_ablation(
         group = [result for result in results if result.condition == condition]
         print(
             f"{condition:9s} success={sum(r.success for r in group)}/{len(group)} "
+            f"warm={mean(r.warm_correct for r in group):.2f}/4 "
             f"cold={mean(r.cold_correct for r in group):.2f}/4 "
             f"no_output={mean(r.no_output_correct for r in group):.2f}/4 "
             f"lesion={mean(r.unconsolidated_lesion_correct for r in group):.2f}/4 "
@@ -277,6 +280,7 @@ def verify_goal(
         later_total = len(group) * len(LATER_HELD_OUT)
         required = math.ceil(minimum_success_rate * len(group))
         successes = sum(result.success for result in group)
+        warm = sum(result.warm_correct for result in group)
         cold = sum(result.cold_correct for result in group)
         retained = sum(result.retained_correct for result in group)
         later = sum(result.later_correct for result in group)
@@ -291,6 +295,8 @@ def verify_goal(
                 f"{condition}: {successes}/{len(group)} complete seeds; "
                 f"required {required}"
             )
+        if warm / old_total < minimum_accuracy:
+            raise AssertionError(f"{condition}: warm acquisition {warm}/{old_total}")
         if cold / old_total < minimum_accuracy:
             raise AssertionError(f"{condition}: cold recall {cold}/{old_total}")
         if retained / old_total < minimum_accuracy:
