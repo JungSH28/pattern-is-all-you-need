@@ -5,7 +5,7 @@
 의존하지 않고 연결·학습·기억이 국소적으로 작동해야 하며, 막힌 계산의 돌파구를 생명 기전에서 찾는다.
 **간단한 대화**는 최종 정의가 아니라 첫 외부 이정표다.
 
-> 상세한 과정·근거·기각한 길은 위키 `research/pattern-is-all-you-need.md`(#1~#28) 참조. 이 README는
+> 상세한 과정·근거·기각한 길은 위키 `research/pattern-is-all-you-need.md`(#1~#29) 참조. 이 README는
 > 현 상태와 재현법의 요약이다.
 
 ### 현재 연구 방향
@@ -140,12 +140,46 @@ chance 부근이지만 공고화 후 cold-only는 98.8~100%였고, 같은 이름
 97.5~100% 뒤집혔다. 따라서 저장된 것은 이름별 category 답표가 아니라 범주 R geometry에서 O 언어
 assembly로 가는 연결이다.
 
-후속학습 뒤 보존은 85.0~96.3%로 verifier 하한은 통과했지만 완전 무망각은 아니다. 현재 출력은 주어진 범주
-어휘 중 한 토큰을 고르는 실제 O-assembly readout이며 자유 문장 생성은 아니다. 합성 속성 대신 자연어에서
-속성을 추출하는 능력, 질의 문맥(`wolf는 무엇인가?`) 처리, 여러 토큰 문장 생성, 계층·다중라벨 범주는 아직
-증명하지 않았다. 출력 반복을 20회보다 늘리면 포화와 함께 간섭이 커졌고, O를 64→128로 늘린 ablation도
+후속학습 뒤 보존은 85.0~96.3%로 verifier 하한은 통과했지만 완전 무망각은 아니다. 이 단계의 출력은 주어진
+범주 어휘 중 한 토큰을 고르는 O-assembly readout이었고, 질의 문맥과 전체 어휘 경쟁은 아래 다음 goal에서
+따로 검증했다. 여러 토큰 자유 문장 생성, 계층·다중라벨 범주는 아직 증명하지 않았다. 출력 반복을 20회보다
+늘리면 포화와 함께 간섭이 커졌고, O를 64→128로 늘린 ablation도
 성능이 악화되어 둘 다 기각했다. O 확장이 고정 out-degree에서 R 재귀 연결의 상대적 몫을 줄였을 가능성은
 있지만 이번 probe에서 원인 자체를 분리 측정하지는 않았다.
+
+**두 트랙 end-to-end 질의응답 goal 통과** (`dialogue_qa_probe.py`, 10 seeds). 학습 데이터의 생성·제공은
+환경 상호작용을 흉내 낼 수 없으므로 생물 국소성의 필수조건에서 제외했다. 두 트랙 모두 동일한 합성 사실
+record와 prototype 답 supervision을 받는다. wolf/fox/truck/bike와 이후 peach/drill은 속성 사실만 받고
+질의 정답 target은 한 번도 받지 않는다. 같은 개체에 `what_is wolf→animal`과
+`what_feature wolf→fur`를 물어 query binding을 검사하며, 추론 API에는 후보 답 목록을 넘기지 않고 등록된
+모든 O-token이 경쟁한다.
+
+- **기능 본선** (`FunctionalAssemblyDialogue`): token을 16/512 sparse unit assembly로 유지하고, 전역
+  associative semantic/output memory로 기능 상한을 측정한다.
+- **생물 국소 본선** (`BioLocalAssemblyDialogue`): 기존 단일 connectome에서 query assembly가 상보적인
+  R dendritic subcircuit를 열고, local `pre_R × (teacher_O-post_O)`와 source-local stochastic
+  synaptogenesis/pruning을 사용한다. warm→cold 뒤 fast state를 지우며 후속학습에는 6 round마다 old
+  prototype을 replay한다.
+
+| track/topology | 완벽 seed | 첫 held-out 질의 | gate 제거 | 답 미학습 | warm 제거 | no-rewire | no-replay 보존 | replay 보존 | 새 held-out 질의 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| functional/global | **10/10** | **80/80** | 40/80 | 0/80 | — | — | — | **80/80** | **40/40** |
+| bio/random (본선) | **5/10** | **77/80** | 40/80 | 5/80 | 3/80 | 76/80 | 70/80 | **74/80** | **37/40** |
+| bio/distance | 2/10 | 78/80 | 38/80 | 2/80 | 4/80 | 71/80 | 56/80 | 67/80 | 36/40 |
+| bio/developed | 0/10 | 76/80 | 40/80 | 0/80 | 2/80 | 71/80 | 38/80 | 61/80 | 35/40 |
+
+기능 본선은 전 항목 100%다. 생물 본선으로 선택한 random sparse 조건도 첫 질의 96.3%, cold/replay 후
+보존 92.5%, 새 질의 92.5%로 verifier를 통과했다. gate 제거가 정확히 50%로 떨어져 질문별 dendritic
+routing이 같은 entity의 두 답을 분리한 핵심이고, warm 제거 3.8%는 cold 공고화 필요성을 보인다. replay는
+보존을 87.5→92.5%로 높였다. no-rewire가 이미 95%여서 stochastic structural plasticity의 초기 추가 이득은
+1/80에 불과했다. 물리 거리와 위치발달은 이번 후속 보존을 악화시켜 본선으로 채택하지 않았다.
+
+**locality audit:** sparse assembly, edge-local propagation, local synaptic value update, local dendritic gate
+적용, source-local stochastic pruning/formation, no autograd/weight transport는 충족한다. 남은 전역 scaffold는
+영역 top-k/max activity control, seed/query-gate 균형 배정, supervised target O clamp, 전체 O vocabulary
+argmax다. 데이터 supervision 자체는 허용된 경계조건이지만, target signal의 내부 전달과 나머지 세 장치는
+완전한 생물 국소 구현으로 세지 않는다. 현재 대화 행동은 구조화된 두 query intent에 한 O-token으로 답하는
+단계이며, 자연어 문장 parser와 여러 token 응답 생성은 다음 범위다.
 
 ```bash
 python3 -m unittest -v test_spatial_connectome.py
@@ -153,6 +187,7 @@ python3 spatial_connectome.py
 python3 context_branch_probe.py --seeds 20 --rounds 180 --verify
 python3 category_generalization_probe.py --seeds 20 --verify --quiet
 python3 category_memory_output_probe.py --seeds 20 --verify --quiet
+python3 dialogue_qa_probe.py --seeds 10 --verify --quiet
 ```
 
 ### 현재 성능 scaffold

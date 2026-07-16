@@ -27,6 +27,7 @@ class LocalityAudit:
     global_activity_competition: bool
     global_structural_search: bool
     global_seed_and_gate_balancing: bool
+    global_output_argmax: bool
 
     def as_dict(self) -> dict[str, bool]:
         return asdict(self)
@@ -167,4 +168,5 @@ class BioLocalAssemblyDialogue:
             global_activity_competition=True,
             global_structural_search=False,
             global_seed_and_gate_balancing=True,
+            global_output_argmax=True,
         )

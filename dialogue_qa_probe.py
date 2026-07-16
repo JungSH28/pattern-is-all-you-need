@@ -446,6 +446,7 @@ def verify_goal(
         "global_teacher_target",
         "global_activity_competition",
         "global_seed_and_gate_balancing",
+        "global_output_argmax",
     }
     if not all(audit[name] for name in expected_local | expected_scaffolds):
         raise AssertionError("locality audit is incomplete")

@@ -34,6 +34,7 @@ class BioLocalAuditTests(unittest.TestCase):
         self.assertFalse(audit.global_structural_search)
         self.assertTrue(audit.global_activity_competition)
         self.assertTrue(audit.global_seed_and_gate_balancing)
+        self.assertTrue(audit.global_output_argmax)
 
 
 if __name__ == "__main__":
