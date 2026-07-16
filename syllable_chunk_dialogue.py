@@ -613,17 +613,9 @@ class ConnectomeSyllableDialogue:
         )
         self.concept_patterns: dict[tuple[str, ...], torch.Tensor] = {}
         self.control_generator = torch.Generator().manual_seed(seed + 303)
-        self.control_weights = 0.01 * torch.rand(
-            self.chunker.n_units,
-            self.connectome.config.n_substrate,
-            generator=self.control_generator,
-        )
-        self.control_usage = torch.zeros(self.connectome.config.n_substrate)
-        self.control_branches = torch.rand(
-            self.connectome.config.n_substrate,
-            self.connectome.config.n_substrate,
-            generator=self.control_generator,
-        )
+        self.control_prototypes: list[torch.Tensor] = []
+        self.control_gates: list[torch.Tensor] = []
+        self.control_gate_usage = torch.zeros(self.connectome.config.n_substrate)
 
     def register_syllable_vocabulary(self, texts: Iterable[str]) -> None:
         vocabulary = sorted(
@@ -715,44 +707,60 @@ class ConnectomeSyllableDialogue:
         text: str,
         *,
         learning_rate: float = 0.20,
-        fraction: float = 0.125,
+        novelty_threshold: float = 0.80,
+        gate_fraction: float = 0.50,
     ) -> torch.Tensor:
-        """Form a dendritic control assembly by local competitive Hebbian update."""
+        """Recruit or update an unlabeled competitive control assembly."""
         entity = self._entity_pattern(text)
         control = self._control_pattern(text, entity)
-        drive = control @ self.control_weights - 0.02 * self.control_usage
-        count = max(1, round(len(drive) * fraction))
-        winners = torch.topk(drive, count).indices
-        postsynaptic = torch.zeros_like(drive)
-        postsynaptic[winners] = 1.0
-        # Only active presynaptic chunk units and winning dendritic branches
-        # change. Usage is a simulated local inhibitory/homeostatic trace.
-        self.control_weights.add_(
-            learning_rate * torch.outer(control, postsynaptic)
-        ).clamp_(0.0, 2.0)
-        self.control_usage.mul_(0.995).add_(postsynaptic)
-        return postsynaptic
+        similarities = [
+            float(torch.dot(control, prototype))
+            for prototype in self.control_prototypes
+        ]
+        if not similarities or max(similarities) < novelty_threshold:
+            prototype_index = len(self.control_prototypes)
+            self.control_prototypes.append(control.clone())
+            count = max(
+                1,
+                round(
+                    self.connectome.config.n_substrate * gate_fraction
+                ),
+            )
+            tie_break = torch.rand(
+                len(self.control_gate_usage), generator=self.control_generator
+            )
+            local = torch.argsort(
+                self.control_gate_usage + 1e-3 * tie_break
+            )[:count]
+            gate = torch.zeros(self.connectome.config.n_units)
+            gate[local + self.connectome.config.n_input] = 1.0
+            self.control_gates.append(gate)
+            self.control_gate_usage[local] += 1.0
+        else:
+            prototype_index = max(
+                range(len(similarities)), key=similarities.__getitem__
+            )
+            prototype = self.control_prototypes[prototype_index]
+            updated = (1.0 - learning_rate) * prototype + learning_rate * control
+            self.control_prototypes[prototype_index] = (
+                updated / updated.square().sum().sqrt().clamp_min(1e-8)
+            )
+        return self.control_gates[prototype_index]
 
     def _learned_control_gate(
         self,
         text: str,
         entity: tuple[str, ...],
-        *,
-        control_fraction: float = 0.125,
-        gate_fraction: float = 0.50,
     ) -> torch.Tensor:
         control = self._control_pattern(text, entity)
-        drive = control @ self.control_weights
-        control_count = max(1, round(len(drive) * control_fraction))
-        control_winners = torch.topk(drive, control_count).indices
-        control_state = torch.zeros_like(drive)
-        control_state[control_winners] = 1.0
-        branch_drive = control_state @ self.control_branches
-        gate_count = max(1, round(len(branch_drive) * gate_fraction))
-        winners = torch.topk(branch_drive, gate_count).indices
-        gate = torch.zeros(self.connectome.config.n_units)
-        gate[winners + self.connectome.config.n_input] = 1.0
-        return gate
+        if not self.control_prototypes:
+            raise RuntimeError("query-control assemblies have not been learned")
+        similarities = [
+            float(torch.dot(control, prototype))
+            for prototype in self.control_prototypes
+        ]
+        winner = max(range(len(similarities)), key=similarities.__getitem__)
+        return self.control_gates[winner]
 
     def bound_state(self, text: str, *, controlled: bool = True) -> torch.Tensor:
         entity = self._entity_pattern(text)
