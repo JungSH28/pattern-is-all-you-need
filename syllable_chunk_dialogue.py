@@ -307,6 +307,7 @@ class SyllableLocalityAudit:
     local_semantic_coactivity_update: bool
     local_output_pre_post_update: bool
     query_control_from_learned_temporal_activity: bool
+    local_query_control_prototype_update: bool
     no_autograd_or_weight_transport: bool
     global_teacher_target: bool
     global_fact_episode_intersection: bool
@@ -580,6 +581,7 @@ class BioLocalSyllableDialogue(_SyllableDialogueBase):
             local_semantic_coactivity_update=True,
             local_output_pre_post_update=True,
             query_control_from_learned_temporal_activity=True,
+            local_query_control_prototype_update=False,
             no_autograd_or_weight_transport=True,
             global_teacher_target=True,
             global_fact_episode_intersection=False,
@@ -837,6 +839,7 @@ class ConnectomeSyllableDialogue:
             local_semantic_coactivity_update=True,
             local_output_pre_post_update=True,
             query_control_from_learned_temporal_activity=True,
+            local_query_control_prototype_update=True,
             no_autograd_or_weight_transport=True,
             global_teacher_target=True,
             global_fact_episode_intersection=True,
