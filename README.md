@@ -69,14 +69,14 @@ cold = 공고화된 장기 연결·안정된 assembly
 
 | topology | 성공 | 평균 R-state cosine | 평균 연결 거리 |
 |---|---:|---:|---:|
-| random sparse | 20/20 | 0.399 | 0.628 |
-| distance-biased | 17/20 | 0.377 | 0.505 |
-| distance + position development | 18/20 | 0.370 | 0.493 |
+| random sparse | 19/20 | 0.468 | 0.628 |
+| distance-biased | 17/20 | 0.505 | 0.505 |
+| distance + position development | 17/20 | 0.497 | 0.493 |
 
 첫 구현(token당 5 내부 step)은 마지막 B가 앞 문맥을 지워 R cosine 0.92~0.97, 성공 0/5였다. 새로운
 기전을 더하지 않고 내부 step을 2로 줄여 transient를 보존하자 분기가 재현됐다. **거리 자체가 문맥 분기의
-필수조건은 아니며**, 배선 단축과 상태 분리를 주는 보조 prior다. 위치 발달은 distance-only보다 성공률과
-상태 분리를 조금 회복했지만 random의 분기 성공률을 넘지는 않았다.
+필수조건은 아니며**, 배선을 단축하는 보조 prior다. 현재 signed-LTD core에서는 위치 발달이 distance-only의
+문맥 분기 성공률을 높이지 않았다.
 
 **범주 일반화 goal 통과** (`category_generalization_probe.py`, 20 seeds): cat/dog/horse와 car/bus/van의
 속성 경험으로 두 prototype을 만들고, 범주 target을 한 번도 받지 않은 wolf/fox/truck/bike를 R-assembly
