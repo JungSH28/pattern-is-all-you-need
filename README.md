@@ -2,18 +2,27 @@
 
 뇌 부합(brain-aligned) sparse 언어모델 연구. **설계 원칙: 모든 구조가 뇌 기전과 대응하고, 학습은
 backprop이 아닌 생물학적으로 그럴듯한 국소 규칙으로 한다.** 목표는 transformer의 ppl을 이기는 것이
-아니라, (1) sparse recurrent/feedforward assembly로 언어를 처리하는 뇌 부합 substrate를 만들고
-(2) 그 위에 언어 head를 얹어 **간단한 대화가 가능한 수준**까지 도달하는 것.
+아니라, 하나의 sparse connectome에서 문맥·범주화·장기기억·조합/사고가 일어나고 그 내부 능력이 언어
+입출력을 통해 드러나는 모델을 만드는 것이다. **간단한 대화**는 최종 정의가 아니라 첫 외부 이정표다.
 
-> 상세한 과정·근거·기각한 길은 위키 `research/pattern-is-all-you-need.md`(#1~#18) 참조. 이 README는
+> 상세한 과정·근거·기각한 길은 위키 `research/pattern-is-all-you-need.md`(#1~#24) 참조. 이 README는
 > 현 상태와 재현법의 요약이다.
+
+### 목표의 층위
+
+1. **기질(substrate)**: 입력·저장/이성·출력 유닛이 하나의 sparse 연결망을 이루고, 토큰·관념은 유닛
+   assembly로 표현된다.
+2. **내부 능력**: 문맥에 따른 다른 상태 전개, 범주 공유, 장기기억 공고화, 순서·조합·사고를 각각 직접
+   probe한다.
+3. **언어 행동**: 위 능력을 사용해 내용에 맞는 대화를 생성한다. 유창한 공감 문장만 만드는 것은 성공으로
+   세지 않는다.
 
 ---
 
 ## 1. 논지 (Thesis)
 
-- **토큰 = sparse cell assembly.** 각 토큰은 고정 무작위 k-hot 활성 패턴(감각 안정성). 의미는 anchor가
-  아니라 학습된 연결/표현에 창발해야 한다.
+- **토큰·관념 = sparse cell assembly.** 감각 입력은 안정된 sparse seed를 줄 수 있지만, 저장·이성
+  substrate의 assembly와 의미 관계는 연결 및 활동에서 형성되어야 한다.
 - **학습 = 국소 규칙.** backprop의 weight transport(순전파 가중치를 거꾸로 읽기)는 뉴런이 못 한다.
   대신 feedback alignment 계열(고정 무작위 피드백)로 credit을 전달한다.
 - **언어 ≠ 사고.** 언어망(이해/생성 I/O)과 추론망(multiple-demand)은 분리된다 (Fedorenko et al.).
@@ -23,7 +32,47 @@ backprop이 아닌 생물학적으로 그럴듯한 국소 규칙으로 한다.**
 
 ---
 
-## 2. 현재 아키텍처
+## 2. 목표 아키텍처와 현재 scaffold
+
+### 목표 아키텍처 — 원래 방향 복귀
+
+```text
+하나의 sparse connectome W
+
+입력 유닛 I  →  저장·이성 유닛 R  →  출력 유닛 O
+                  ↕ 재귀 연결
+
+hot  = 현재 활성 assembly·계산
+warm = 빠르게 변하는 연결
+cold = 공고화된 장기 연결·안정된 assembly
+```
+
+- I/R/O는 서로 다른 모델이나 알고리즘 행렬이 아니라 **한 연결망 안의 유닛 구역**이다. 각 유닛의 연결
+  벡터는 전체 connectome의 해당 행이다.
+- v12가 반증한 것은 이 원형 전체가 아니라, 어휘 전체를 R의 고정점 attractor로 저장한 단순 구현이다.
+  기억 복원에는 안정상태를 쓸 수 있지만 문맥·순서·사고는 transient assembly trajectory도 사용한다.
+- 선택적으로 각 유닛에 발달 중 움직일 수 있는 3차원 위치를 둔다. 유클리드 거리는 topology 형성에,
+  assembly cosine은 단어·관념의 표상 유사도 측정에 사용한다. 우선 거리 기반 연결 형성만 검증하고 전파
+  지연은 별도 가설로 보류한다.
+- 첫 복귀 프로토타입은 `spatial_connectome.py`, 구조·학습 probe는 `test_spatial_connectome.py`다.
+
+현재 프로토타입이 검증한 범위:
+
+- 하나의 edge-list가 I/R/O의 모든 연결을 담고, 각 유닛 벡터가 그 그래프의 한 행으로 복원됨
+- 거리 기반 연결의 평균 길이가 동일 해부학적 후보쌍 평균보다 짧음
+- `A→B`와 `B→A`, 같은 마지막 토큰의 다른 앞 문맥이 서로 다른 hot 상태를 만듦
+- 초기 위치가 활동에 따라 움직이고 위치 가소성이 감소함
+- 국소 free/target phase 학습이 목표 출력 assembly의 활성을 높이고 warm 변화가 cold로 전달됨
+
+아직 검증하지 않은 범위는 범주 일반화, 장기 연속학습의 무망각, 다단계 사고, 자연어 대화다. 구조가 있다는
+것과 이 능력들이 생겼다는 것을 구분하며, 다음 단계에서 각 probe를 하나씩 통과시킨다.
+
+```bash
+python3 -m unittest -v test_spatial_connectome.py
+python3 spatial_connectome.py
+```
+
+### 현재 성능 scaffold
 
 ```
 입력(정체성)     이성(조합/라우팅)              출력(생성)
@@ -40,6 +89,10 @@ sparse code  →   fixed-random routing      →   Hebbian/local readout
   (P1≠P2) + 높은 threshold(AND) 또는 softmax 라우팅.
 - **출력**: `log(relu(·)+ε) + α·unigram`. Weber-Fechner 로그 압축 + 기저 흥분성 backoff.
 - **학습**: 국소 delta(readout) + feedback alignment/DFA(임베딩). Adam/backprop은 상한 비교용 발판.
+
+이 scaffold의 `Embedding`, `P1/P2`, `W_bi/W_co`, Q/K/V와 별도 head는 메커니즘별 성능을 진단하기 위해
+분해한 장치다. 원래의 단일 connectome 구현과 같지 않으며, 실험 결과를 보존한 채 목표 구조로 통합하는
+과정이 다음 본선이다.
 
 ---
 
@@ -71,8 +124,8 @@ sparse code  →   fixed-random routing      →   Hebbian/local readout
 
 1. **붕괴 2종 분리.** ①부호붕괴(all-negative): predictive-coding target이 mostly-0이라 오차가 전부
    음수 → vocab 무관. **err-centering**(오차 zero-mean; cross-entropy 기울기에 내장)으로 해결. ②attractor
-   붕괴(단일 고정점): 재귀 동역학에 vocab을 다 저장 = Hopfield 용량 초과(용량 ~0.14·N ≪ vocab). 정체성을
-   fixed-point에 두는 전제가 실패 → 정체성은 입력 코드에, 이성은 조합/연산으로 재정의.
+   붕괴(단일 고정점): 고전 Hopfield식 구현으로 재귀망에 vocab 전체를 고정점으로 저장하면서 용량을 초과했다.
+   **이는 단일 connectome 전체의 반증이 아니라 token=fixed-point 가정의 실패다.**
 2. **표현학습은 bio-국소로 가능.** feedback alignment(backprop 없음)가 임베딩을 학습하고 붕괴하지 않는다
    (vocab2000: FA 83→ 하락, backprop 62.9). 콜드-웜-핫 scaffold(구조 prior + FA 학습)가 무작위 init보다
    우수. → "credit assignment = 하드월"은 반증됨. 남은 건 성능 격차.
@@ -82,8 +135,9 @@ sparse code  →   fixed-random routing      →   Hebbian/local readout
 4. **조합(binding)이 남은 레버.** 덧셈 결합은 순서/상호작용을 못 잡아 천장(58). softmax 라우팅
    (attention)이 additive를 이긴다(58.6 vs 61.8). 다만 pairwise Hadamard(곱을 feature로)는 실패
    (product를 *score*로 써야). 완전 폐쇄(→53)는 transformer 스택 필요 = 비-bio.
-5. **간단한 대화 달성.** 큰 vocab(→ `<unk>` 홍수 제거) + 대화 데이터(empathetic dialogues, 턴마커)로
-   frozen-routing 모델이 공감 레지스터로 응답한다. 완전-bio(DFA) 버전도 작동(품질 비용 있음).
+5. **간단한 대화의 형식만 달성.** 큰 vocab(→ `<unk>` 홍수 제거) + 대화 데이터(empathetic dialogues,
+   턴마커)로 frozen-routing 모델이 공감 레지스터로 응답한다. 그러나 사실·추론·구체적 지시 probe에서
+   실패해 제네릭 공감기로 판정했다. 완전-bio(DFA) 버전도 형식은 유지하지만 품질 비용이 있다.
 6. **softmax 없는 window 경쟁도 격차를 완전히 못 메운다.** 비가환 결합(승산게이트·비교게이트·행렬혼합,
    60.2~60.5)은 순서보존은 되나 attn과 격차 그대로 — 원인은 비가환성이 아니라 window 전체 경쟁 정규화
    부재. divisive normalization(Carandini & Heeger, 실측 지수 n≈2)이 최고 non-softmax(59.4)이나 여전히
