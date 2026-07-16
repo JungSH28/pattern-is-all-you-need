@@ -78,13 +78,31 @@ cold = 공고화된 장기 연결·안정된 assembly
 필수조건은 아니며**, 배선 단축과 상태 분리를 주는 보조 prior다. 위치 발달은 distance-only보다 성공률과
 상태 분리를 조금 회복했지만 random의 분기 성공률을 넘지는 않았다.
 
-아직 검증하지 않은 범위는 범주 일반화, 장기 연속학습의 무망각, 다단계 사고, 자연어 대화다. 구조가 있다는
-것과 이 능력들이 생겼다는 것을 구분하며, 다음 단계에서 각 probe를 하나씩 통과시킨다.
+**범주 일반화 goal 통과** (`category_generalization_probe.py`, 20 seeds): cat/dog/horse와 car/bus/van의
+속성 경험으로 두 prototype을 만들고, 범주 target을 한 번도 받지 않은 wolf/fox/truck/bike를 R-assembly
+cosine으로 분류했다. 각 held-out은 공통 속성 2개와 새 속성 1개를 가진다.
+
+| topology | 완벽 seed | held-out | 무학습 | labeled-only | 속성교환 | R cosine gap |
+|---|---:|---:|---:|---:|---:|---:|
+| random sparse | 19/20 | **79/80** | 44/80 | 38/80 | **78/80** | +0.267 |
+| distance-biased | 20/20 | **80/80** | 48/80 | 45/80 | **76/80** | +0.270 |
+| distance + position development | 17/20 | **76/80** | 37/80 | 48/80 | **73/80** | +0.193 |
+
+`labeled-only`는 prototype 개체만 속성학습하고 held-out은 무작위로 둔 통제다. `속성교환`은 wolf 같은 이름은
+유지하면서 vehicle 속성을 주었을 때 예측이 vehicle로 뒤집히는지를 센다. 따라서 결과는 이름 우연이나
+prototype 조직만으로 설명되지 않는다. 돌파구는 (1) property target과 entity free 상태 차이를 쓰는 국소
+I→R delta(LTP+LTD), (2) 공동활성 R 유닛으로 입력당 4개 시냅스를 만들되 총 out-degree는 유지하는 구조
+가소성, (3) 감각 seed 충돌을 줄인 충분한 입력 공간이었다.
+
+이 결과가 증명한 것은 **합성 속성 경험으로 형성된 내부 범주 geometry와 held-out 전이**다. category 단어를
+출력하는 언어 head, 자연어에서 속성 추출, 계층적 범주화는 아직 증명하지 않았다. 아직 검증하지 않은 큰
+범위는 장기 연속학습의 무망각, 다단계 사고, 자연어 대화다.
 
 ```bash
 python3 -m unittest -v test_spatial_connectome.py
 python3 spatial_connectome.py
 python3 context_branch_probe.py --seeds 20 --rounds 180 --verify
+python3 category_generalization_probe.py --seeds 20 --verify --quiet
 ```
 
 ### 현재 성능 scaffold
