@@ -255,6 +255,51 @@ class SpatialConnectome:
         pattern[self.input_assemblies[token]] = 1.0
         return pattern
 
+    def expanded_input_pattern(self, pattern: torch.Tensor) -> torch.Tensor:
+        """Place an externally formed sensory assembly on the shared I region."""
+        if pattern.ndim != 1 or len(pattern) != self.config.n_input:
+            raise ValueError("input pattern must have shape (n_input,)")
+        expanded = torch.zeros(self.config.n_units)
+        expanded[: self.config.n_input] = pattern
+        return expanded
+
+    def sensory_assembly_state(
+        self, pattern: torch.Tensor, *, steps: int = 2
+    ) -> torch.Tensor:
+        """Evoke R activity from a learned input assembly without a token ID."""
+        sensory = self.expanded_input_pattern(pattern)
+        state = torch.zeros(self.config.n_units)
+        for inner in range(steps):
+            state = self.step(state, sensory=sensory if inner == 0 else None)
+        return state
+
+    def sensory_assembly_gate(
+        self, pattern: torch.Tensor, *, fraction: float = 0.50
+    ) -> torch.Tensor:
+        """Project a control assembly through its physical I->R synapses.
+
+        The gate is selected from postsynaptic drive, not from an external
+        query label. Global top-k remains an audited activity scaffold.
+        """
+        if not 0.0 < fraction <= 1.0:
+            raise ValueError("fraction must be in (0, 1]")
+        sensory = self.expanded_input_pattern(pattern)
+        edge = (self.region[self.src] == INPUT) & (
+            self.region[self.dst] == SUBSTRATE
+        )
+        drive = torch.zeros(self.config.n_units)
+        drive.scatter_add_(
+            0,
+            self.dst[edge],
+            sensory[self.src[edge]] * self.effective_weights[edge].abs(),
+        )
+        substrate = torch.where(self.region == SUBSTRATE)[0]
+        count = max(1, round(len(substrate) * fraction))
+        winners = substrate[torch.topk(drive[substrate], count).indices]
+        gate = torch.zeros(self.config.n_units)
+        gate[winners] = 1.0
+        return gate
+
     def output_pattern(self, token: str) -> torch.Tensor:
         self.register_token(token)
         pattern = torch.zeros(self.config.n_units)
@@ -408,6 +453,19 @@ class SpatialConnectome:
         runner_up = ordered[1][1] if len(ordered) > 1 else 0.0
         return ordered[0][0], ordered[0][1] - runner_up, scores
 
+    def predict_bound_output(
+        self, bound_state: torch.Tensor, *, readout_steps: int = 1
+    ) -> tuple[str, float, dict[str, float]]:
+        """Decode an internally bound R state over the full O vocabulary."""
+        state = bound_state.clone()
+        for _ in range(readout_steps):
+            state = self.step(state)
+        self.state = state
+        scores = self.output_scores(state, tuple(self.output_assemblies))
+        ordered = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        runner_up = ordered[1][1] if len(ordered) > 1 else 0.0
+        return ordered[0][0], ordered[0][1] - runner_up, scores
+
     def learn_output_association(
         self,
         context: Sequence[str],
@@ -473,6 +531,35 @@ class SpatialConnectome:
         delta = (
             self.signs[output_edge]
             * free[self.src[output_edge]]
+            * output_error
+        )
+        self.warm[output_edge] = (
+            self.warm[output_edge] + learning_rate * delta
+        ).clamp(min=-1.5, max=1.5)
+        return float(delta.abs().mean().item())
+
+    def learn_bound_output(
+        self,
+        bound_state: torch.Tensor,
+        target: str,
+        *,
+        learning_rate: float = 0.03,
+        structural_plasticity: bool = False,
+    ) -> float:
+        """Apply the local R->O rule to an internally formed bound state."""
+        target_pattern = self.output_pattern(target)
+        if structural_plasticity:
+            self._rewire_output_inputs(bound_state, target_pattern)
+        readout = self.step(bound_state)
+        output_edge = (self.region[self.src] == SUBSTRATE) & (
+            self.region[self.dst] == OUTPUT
+        )
+        output_error = target_pattern[self.dst[output_edge]] - readout[
+            self.dst[output_edge]
+        ]
+        delta = (
+            self.signs[output_edge]
+            * bound_state[self.src[output_edge]]
             * output_error
         )
         self.warm[output_edge] = (
@@ -628,6 +715,36 @@ class SpatialConnectome:
             delta[entity_edge] = (
                 target[self.dst[entity_edge]] - free[self.dst[entity_edge]]
             )
+            self.warm.add_(learning_rate * delta).clamp_(min=-1.5, max=1.5)
+            if iteration % consolidate_every == 0:
+                self.consolidate()
+
+    def learn_sensory_concept(
+        self,
+        sensory_code: torch.Tensor,
+        properties: Sequence[str],
+        *,
+        rounds: int = 40,
+        learning_rate: float = 0.30,
+        settle_steps: int = 2,
+        consolidate_every: int = 10,
+    ) -> None:
+        """Organize a learned sensory chunk without assigning a token name."""
+        sensory = self.expanded_input_pattern(sensory_code)
+        target = self.simultaneous_state(properties, steps=settle_steps)
+        self._rewire_concept_inputs(sensory, target)
+        edge = (
+            (self.region[self.src] == INPUT)
+            & (self.region[self.dst] == SUBSTRATE)
+            & (sensory[self.src] > 0)
+        )
+        for iteration in range(rounds):
+            free = self.sensory_assembly_state(
+                sensory_code, steps=settle_steps
+            )
+            target = self.simultaneous_state(properties, steps=settle_steps)
+            delta = torch.zeros_like(self.warm)
+            delta[edge] = target[self.dst[edge]] - free[self.dst[edge]]
             self.warm.add_(learning_rate * delta).clamp_(min=-1.5, max=1.5)
             if iteration % consolidate_every == 0:
                 self.consolidate()
