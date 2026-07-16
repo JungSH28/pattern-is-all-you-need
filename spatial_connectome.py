@@ -81,6 +81,8 @@ class SpatialConnectome:
 
         self.input_assemblies: dict[str, torch.Tensor] = {}
         self.output_assemblies: dict[str, torch.Tensor] = {}
+        self.input_seed_usage = torch.zeros(config.n_input, dtype=torch.long)
+        self.output_seed_usage = torch.zeros(config.n_output, dtype=torch.long)
 
     def _make_regions(self) -> torch.Tensor:
         c = self.config
@@ -176,8 +178,21 @@ class SpatialConnectome:
         if token in self.input_assemblies:
             return
         c = self.config
-        inp = torch.randperm(c.n_input, generator=self.generator)[:k_input]
-        out = torch.randperm(c.n_output, generator=self.generator)[:k_output]
+        # Independent random draws create accidental seed collisions: later
+        # structural learning can then rewrite an unrelated older token. Spread
+        # seeds over the least-used units, randomizing only within equal-usage
+        # candidates. Semantic overlap must emerge in R rather than be injected
+        # as an unstable accident at the sensory/motor boundary.
+        input_tie_break = torch.rand(c.n_input, generator=self.generator)
+        output_tie_break = torch.rand(c.n_output, generator=self.generator)
+        inp = torch.argsort(
+            self.input_seed_usage.float() + 1e-3 * input_tie_break
+        )[:k_input]
+        out = torch.argsort(
+            self.output_seed_usage.float() + 1e-3 * output_tie_break
+        )[:k_output]
+        self.input_seed_usage[inp] += 1
+        self.output_seed_usage[out] += 1
         self.input_assemblies[token] = inp
         self.output_assemblies[token] = out + c.n_input + c.n_substrate
 

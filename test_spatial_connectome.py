@@ -42,6 +42,12 @@ class SpatialConnectomeTests(unittest.TestCase):
         for unit in (0, self.model.config.n_input, self.model.config.n_units - 1):
             self.assertTrue(torch.equal(matrix[unit], self.model.outgoing_vector(unit)))
 
+    def test_initial_token_seeds_avoid_accidental_overlap(self):
+        input_units = torch.cat(list(self.model.input_assemblies.values()))
+        output_units = torch.cat(list(self.model.output_assemblies.values()))
+        self.assertEqual(len(torch.unique(input_units)), len(input_units))
+        self.assertEqual(len(torch.unique(output_units)), len(output_units))
+
     def test_distance_changes_topology(self):
         self.assertLess(
             self.model.mean_edge_distance(), self.model.mean_allowed_distance()
