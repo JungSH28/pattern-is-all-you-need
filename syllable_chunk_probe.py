@@ -422,6 +422,12 @@ def bio_result(
     model.finalize_chunks()
     for episode in fact_episodes(LATER_CONCEPTS):
         model.observe_fact_episode(episode, rounds=concept_rounds)
+    for episode in fact_episodes(CONCEPTS):
+        model.observe_fact_episode(
+            episode,
+            rounds=5,
+            structural_plasticity=False,
+        )
     later_questions = training_questions(LATER_LABELED)
     for iteration in range(answer_rounds):
         for text, target in later_questions:
