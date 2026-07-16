@@ -159,6 +159,34 @@ class SpatialConnectomeTests(unittest.TestCase):
         )[0]
         self.assertEqual(cold_prediction, "animal")
 
+    def test_query_gates_separate_same_entity_contexts(self):
+        self.model.register_query("what_is")
+        self.model.register_query("what_feature")
+        cat = self.model.query_bound_state("what_is", "cat")
+        feature = self.model.query_bound_state("what_feature", "cat")
+        substrate = self.model.region == SUBSTRATE
+        self.assertGreater(torch.linalg.vector_norm(cat - feature).item(), 1e-4)
+        self.assertEqual(
+            torch.count_nonzero(
+                self.model.query_gates["what_is"][substrate]
+                * self.model.query_gates["what_feature"][substrate]
+            ).item(),
+            0,
+        )
+
+    def test_query_answer_uses_entire_output_vocabulary(self):
+        self.model.learn_concept("cat", ("fur", "fourlegs"), rounds=20)
+        for iteration in range(40):
+            self.model.learn_query_association(
+                "what_is",
+                "cat",
+                "animal",
+                structural_plasticity=iteration == 0,
+            )
+        predicted, _, scores = self.model.predict_query_output("what_is", "cat")
+        self.assertEqual(set(scores), set(self.model.output_assemblies))
+        self.assertEqual(predicted, "animal")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -52,6 +52,7 @@ class ConnectomeConfig:
     recurrent_learning_scale: float = 0.10
     concept_rewire_per_input: int = 4
     output_rewire_per_source: int = 1
+    query_gate_fraction: float = 0.50
     seed: int = 0
 
     @property
@@ -83,6 +84,8 @@ class SpatialConnectome:
         self.output_assemblies: dict[str, torch.Tensor] = {}
         self.input_seed_usage = torch.zeros(config.n_input, dtype=torch.long)
         self.output_seed_usage = torch.zeros(config.n_output, dtype=torch.long)
+        self.query_gates: dict[str, torch.Tensor] = {}
+        self.query_gate_usage = torch.zeros(config.n_substrate, dtype=torch.long)
 
     def _make_regions(self) -> torch.Tensor:
         c = self.config
@@ -199,6 +202,28 @@ class SpatialConnectome:
     def register_vocabulary(self, tokens: Iterable[str]) -> None:
         for token in tokens:
             self.register_token(token)
+
+    def register_query(self, token: str) -> None:
+        """Assign a stable R dendritic gate to a query/intention token.
+
+        The gate is a developmental scaffold: the query locally permits or
+        suppresses each R unit's semantic activity. Least-used allocation keeps
+        early query gates separated; it is explicitly audited as a non-local
+        initialization convenience rather than a learned biological rule.
+        """
+        if token in self.query_gates:
+            return
+        self.register_token(token)
+        c = self.config
+        count = max(1, round(c.n_substrate * c.query_gate_fraction))
+        tie_break = torch.rand(c.n_substrate, generator=self.generator)
+        local = torch.argsort(
+            self.query_gate_usage.float() + 1e-3 * tie_break
+        )[:count]
+        gate = torch.zeros(c.n_units)
+        gate[local + c.n_input] = 1.0
+        self.query_gate_usage[local] += 1
+        self.query_gates[token] = gate
 
     def sensory_pattern(self, token: str) -> torch.Tensor:
         self.register_token(token)
@@ -317,6 +342,45 @@ class SpatialConnectome:
         runner_up = ordered[1][1] if len(ordered) > 1 else 0.0
         return ordered[0][0], ordered[0][1] - runner_up, scores
 
+    def query_bound_state(
+        self, query: str, entity: str, *, gated: bool = True
+    ) -> torch.Tensor:
+        """Bind an entity assembly to a query through local dendritic gating."""
+        self.register_query(query)
+        entity_state = self.simultaneous_state((entity,), steps=2)
+        if not gated:
+            return entity_state
+        bound = torch.zeros_like(entity_state)
+        substrate = self.region == SUBSTRATE
+        bound[substrate] = (
+            entity_state[substrate] * self.query_gates[query][substrate]
+        )
+        return bound
+
+    def predict_query_output(
+        self,
+        query: str,
+        entity: str,
+        *,
+        gated: bool = True,
+        readout_steps: int = 1,
+    ) -> tuple[str, float, dict[str, float]]:
+        """Answer from the entire registered output vocabulary.
+
+        No per-question candidate list is accepted. The query gates an entity
+        state, silent R->O propagation evokes motor assemblies, and every
+        registered token competes in the same decoder.
+        """
+        state = self.query_bound_state(query, entity, gated=gated)
+        for _ in range(readout_steps):
+            state = self.step(state)
+        self.state = state
+        candidates = tuple(self.output_assemblies)
+        scores = self.output_scores(state, candidates)
+        ordered = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        runner_up = ordered[1][1] if len(ordered) > 1 else 0.0
+        return ordered[0][0], ordered[0][1] - runner_up, scores
+
     def learn_output_association(
         self,
         context: Sequence[str],
@@ -342,6 +406,37 @@ class SpatialConnectome:
         readout = free
         for _ in range(readout_steps):
             readout = self.step(readout)
+        output_edge = (self.region[self.src] == SUBSTRATE) & (
+            self.region[self.dst] == OUTPUT
+        )
+        output_error = target_pattern[self.dst[output_edge]] - readout[
+            self.dst[output_edge]
+        ]
+        delta = (
+            self.signs[output_edge]
+            * free[self.src[output_edge]]
+            * output_error
+        )
+        self.warm[output_edge] = (
+            self.warm[output_edge] + learning_rate * delta
+        ).clamp(min=-1.5, max=1.5)
+        return float(delta.abs().mean().item())
+
+    def learn_query_association(
+        self,
+        query: str,
+        entity: str,
+        target: str,
+        *,
+        learning_rate: float = 0.03,
+        structural_plasticity: bool = False,
+    ) -> float:
+        """Teach a query-conditioned answer with the local R->O rule."""
+        free = self.query_bound_state(query, entity, gated=True)
+        target_pattern = self.output_pattern(target)
+        if structural_plasticity:
+            self._rewire_output_inputs(free, target_pattern)
+        readout = self.step(free)
         output_edge = (self.region[self.src] == SUBSTRATE) & (
             self.region[self.dst] == OUTPUT
         )
