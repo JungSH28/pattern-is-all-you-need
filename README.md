@@ -5,7 +5,7 @@
 의존하지 않고 연결·학습·기억이 국소적으로 작동해야 하며, 막힌 계산의 돌파구를 생명 기전에서 찾는다.
 **간단한 대화**는 최종 정의가 아니라 첫 외부 이정표다.
 
-> 상세한 과정·근거·기각한 길은 위키 `research/pattern-is-all-you-need.md`(#1~#29) 참조. 이 README는
+> 상세한 과정·근거·기각한 길은 위키 `research/pattern-is-all-you-need.md`(#1~#30) 참조. 이 README는
 > 현 상태와 재현법의 요약이다.
 
 ### 현재 연구 방향
@@ -181,6 +181,42 @@ argmax다. 데이터 supervision 자체는 허용된 경계조건이지만, targ
 완전한 생물 국소 구현으로 세지 않는다. 현재 대화 행동은 구조화된 두 query intent에 한 O-token으로 답하는
 단계이며, 자연어 문장 parser와 여러 token 응답 생성은 다음 범위다.
 
+**무경계 음절→chunk→질의응답 goal 통과** (`syllable_chunk_probe.py`, 10 seeds). 외부 전처리는 Unicode
+정규화와 고정 한글 음절 repertoire만 제공한다. 입력은 공백과 word/어절 경계를 제거한
+`늑대가속한종류를말해 → [늑, 대, 가, 속, 한, 종, 류, 를, 말, 해]`이며 entity ID, query intent,
+답 후보 목록을 API에 넘기지 않는다. `종류`/`특징`을 포함한 학습 문장과 정확히 같은 질문도 평가에 없다.
+
+- **기능 본선** (`FunctionalSyllableDialogue`): 반복 substring 통계로 2~6음절 chunk assembly를 만들고,
+  전역 semantic/conjunctive output memory를 쓰는 상한이다.
+- **생물 국소 본선** (`ConnectomeSyllableDialogue`): 인접 음절 assembly의 활성 pre/post edge만 강화하고,
+  고정 local threshold를 넘은 반복 경로가 sparse chunk assembly를 모집한다. 세 개의 무경계 사실 문장을
+  한 supervised episode로 제공하면 세 문장에 반복된 chunk가 개체 assembly가 되어 기존 단일
+  `SpatialConnectome` I→R concept learning에 직접 들어간다. query chunk는 intent label 없이 novelty
+  competition으로 6개 control prototype을 형성하고 12.5% R dendritic subcircuit를 연다. 이후 기존 local
+  I→R concept rule, R→O teacher-clamped rule, warm→cold 공고화와 full O-vocabulary readout을 사용한다.
+
+| track | goal 성공 seed | held-out QA | control 제거 | temporal 학습 제거 | 음절 역순 | warm 제거 | entity chunk |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| functional/global | **10/10** | **80/80** | 34/80 | 19/80 | 20/80 | — | **100/100** |
+| bio/single-connectome | **6/10** | **76/80** | 40/80 | **0/80** | **0/80** | 6/80 | **100/100** |
+
+기능 트랙의 summary `success=6/10`은 명시 goal 밖 후속 보존·새 범주까지 모두 맞힌 더 강한 조건이며,
+현재 goal의 base 조건은 10/10이다. 정답 target을 받지 않은 wolf/fox/truck/bike가 처음 보는 조사 조합과
+질문 문장에서 bio 95%를 기록했다. bio
+control 제거는 두 질문을 합쳐 50%, temporal update 제거는 recurrent fact chunk 자체를 만들지 못해 0%,
+역순은 learned entity chunk를 재활성하지 못해 0%, 공고화 전 warm 제거는 7.5%였다. 따라서 결과는 외부
+word tokenizer나 숨은 query ID lookup으로 설명되지 않는다. 기능 트랙은 후속 fruit/tool 실험도 보존
+77/80·새 34/40이지만, single-connectome bio의 continual stage는 이번 명시 goal에 포함하지 않았고
+검증값을 `-1`로 출력한다. 별도 dense local prototype의 후속학습 성공을 single-connectome 성공으로
+합산하지 않는다.
+
+**새 locality audit:** bio 본선은 boundary-free syllable input, local temporal edge update, local query
+prototype update, single-connectome I/R/O semantic/output memory, local concept/output synaptic update,
+no autograd/weight transport를 충족한다. 남은 전역 scaffold는 finite-window enumeration, fact episode의
+공통 chunk 교집합, novelty winner와 sparse activity competition, chunk/control seed 균형 모집,
+supervised property·O target clamp, full-vocabulary argmax다. 특히 supervised episode grouping은 실제
+환경에서 같은 대상을 여러 발화와 함께 보는 상황의 대용물이며 생물 국소 성공으로 세지 않는다.
+
 ```bash
 python3 -m unittest -v test_spatial_connectome.py
 python3 spatial_connectome.py
@@ -188,6 +224,8 @@ python3 context_branch_probe.py --seeds 20 --rounds 180 --verify
 python3 category_generalization_probe.py --seeds 20 --verify --quiet
 python3 category_memory_output_probe.py --seeds 20 --verify --quiet
 python3 dialogue_qa_probe.py --seeds 10 --verify --quiet
+python3 syllable_chunk_probe.py --seeds 10 --verify --quiet
+python3 -m unittest -v test_syllable_chunk_dialogue.py
 ```
 
 ### 현재 성능 scaffold
