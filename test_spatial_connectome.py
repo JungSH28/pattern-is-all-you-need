@@ -131,6 +131,28 @@ class SpatialConnectomeTests(unittest.TestCase):
         after = self.model.output_scores(after_state, ["c"])["c"]
         self.assertGreater(after, before + 0.05)
 
+    def test_category_output_can_consolidate_into_cold_memory(self):
+        edge_count = len(self.model.src)
+        for iteration in range(40):
+            self.model.learn_output_association(
+                ("cat",),
+                "animal",
+                structural_plasticity=iteration == 0,
+            )
+        warm_prediction = self.model.predict_output(
+            ("cat",), ("animal", "dog")
+        )[0]
+        self.assertEqual(warm_prediction, "animal")
+        self.assertEqual(len(self.model.src), edge_count)
+
+        self.model.consolidate(cycles=100)
+        self.model.warm.zero_()
+        self.model.state.zero_()
+        cold_prediction = self.model.predict_output(
+            ("cat",), ("animal", "dog")
+        )[0]
+        self.assertEqual(cold_prediction, "animal")
+
 
 if __name__ == "__main__":
     unittest.main()

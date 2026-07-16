@@ -51,6 +51,7 @@ class ConnectomeConfig:
     warm_decay: float = 0.90
     recurrent_learning_scale: float = 0.10
     concept_rewire_per_input: int = 4
+    output_rewire_per_source: int = 1
     seed: int = 0
 
     @property
@@ -276,6 +277,119 @@ class SpatialConnectome:
             scores[token] = float((state * pattern).sum().item())
         return scores
 
+    def predict_output(
+        self,
+        context: Sequence[str],
+        candidates: Sequence[str],
+        *,
+        readout_steps: int = 1,
+    ) -> tuple[str, float, dict[str, float]]:
+        """Evoke and decode an output assembly after a sensory context.
+
+        The extra silent step is a physical R->O propagation step, not an
+        external similarity head. Scores read activity on each candidate's O
+        assembly; the highest-scoring token is the emitted symbol.
+        """
+        if not candidates:
+            raise ValueError("candidates must not be empty")
+        state = self.run_sequence(context, reset=True)
+        assert isinstance(state, torch.Tensor)
+        for _ in range(readout_steps):
+            state = self.step(state)
+        self.state = state
+        scores = self.output_scores(state, candidates)
+        ordered = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        runner_up = ordered[1][1] if len(ordered) > 1 else 0.0
+        return ordered[0][0], ordered[0][1] - runner_up, scores
+
+    def learn_output_association(
+        self,
+        context: Sequence[str],
+        target: str,
+        *,
+        learning_rate: float = 0.03,
+        structural_plasticity: bool = False,
+        readout_steps: int = 1,
+    ) -> float:
+        """Link an evoked R assembly to a language-output assembly locally.
+
+        A held presynaptic R trace and the target O neuron's local difference
+        between teacher activity and its own evoked activity determine the
+        update. Optional structural plasticity gives active excitatory R units
+        sparse access to the taught O assembly at fixed out-degree.
+        """
+        free = self.run_sequence(context, reset=True)
+        assert isinstance(free, torch.Tensor)
+        target_pattern = self.output_pattern(target)
+        if structural_plasticity:
+            self._rewire_output_inputs(free, target_pattern)
+
+        readout = free
+        for _ in range(readout_steps):
+            readout = self.step(readout)
+        output_edge = (self.region[self.src] == SUBSTRATE) & (
+            self.region[self.dst] == OUTPUT
+        )
+        output_error = target_pattern[self.dst[output_edge]] - readout[
+            self.dst[output_edge]
+        ]
+        delta = (
+            self.signs[output_edge]
+            * free[self.src[output_edge]]
+            * output_error
+        )
+        self.warm[output_edge] = (
+            self.warm[output_edge] + learning_rate * delta
+        ).clamp(min=-1.5, max=1.5)
+        return float(delta.abs().mean().item())
+
+    def _rewire_output_inputs(
+        self, concept_state: torch.Tensor, target_pattern: torch.Tensor
+    ) -> None:
+        """Create sparse R->O access from a concept to its spoken token.
+
+        Each active excitatory R source keeps at most the configured number of
+        direct synapses into this target assembly. Its weakest other R->O edge
+        is replaced, so total degree is unchanged and consolidated strong edges
+        resist later replacement. A new synapse starts in warm memory.
+        """
+        required = self.config.output_rewire_per_source
+        if required <= 0:
+            return
+        active_sources = torch.where(
+            (self.region == SUBSTRATE)
+            & self.is_excitatory
+            & (concept_state > 0)
+        )[0]
+        target_units = torch.where((self.region == OUTPUT) & (target_pattern > 0))[0]
+        for source in active_sources.tolist():
+            output_edges = torch.where(
+                (self.src == source) & (self.region[self.dst] == OUTPUT)
+            )[0]
+            if len(output_edges) == 0:
+                continue
+            existing = self.dst[output_edges]
+            present = int(torch.isin(existing, target_units).sum().item())
+            number = min(required - present, len(output_edges))
+            if number <= 0:
+                continue
+            candidates = target_units[~torch.isin(target_units, existing)]
+            number = min(number, len(candidates))
+            if number <= 0:
+                continue
+
+            selected = torch.randperm(
+                len(candidates), generator=self.generator
+            )[:number]
+            replacement_pool = output_edges[~torch.isin(existing, target_units)]
+            magnitude = (self.cold + self.warm).abs()[replacement_pool]
+            replacement = replacement_pool[
+                torch.topk(magnitude, number, largest=False).indices
+            ]
+            self.dst[replacement] = candidates[selected]
+            self.cold[replacement] = 0.0
+            self.warm[replacement] = self.config.initial_weight
+
     def learn_association(
         self,
         context: Sequence[str],
@@ -422,11 +536,14 @@ class SpatialConnectome:
             self.cold[edge_indices] = self.config.initial_weight
             self.warm[edge_indices] = 0.0
 
-    def consolidate(self) -> None:
+    def consolidate(self, cycles: int = 1) -> None:
         """Transfer fast synaptic change into the slow variable on each edge."""
+        if cycles < 0:
+            raise ValueError("cycles must be non-negative")
         rate = self.config.consolidation_rate
-        self.cold.add_(rate * self.warm).clamp_(min=0.0, max=2.0)
-        self.warm.mul_(self.config.warm_decay)
+        for _ in range(cycles):
+            self.cold.add_(rate * self.warm).clamp_(min=0.0, max=2.0)
+            self.warm.mul_(self.config.warm_decay)
 
     def develop_positions(self, activity_samples: torch.Tensor, epochs: int = 1) -> None:
         """Early activity-dependent movement followed by topology resampling.
