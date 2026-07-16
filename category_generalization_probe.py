@@ -99,6 +99,7 @@ def make_model(
             topology=topology,
             steps_per_token=2,
             max_region_density=0.05,
+            max_output_density=0.10,
             initial_weight=0.08,
             query_gate_fraction=query_gate_fraction,
             seed=seed,

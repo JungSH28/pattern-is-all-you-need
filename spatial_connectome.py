@@ -42,6 +42,7 @@ class ConnectomeConfig:
     threshold: float = 0.08
     leak: float = 0.35
     max_region_density: float = 0.18
+    max_output_density: float | None = None
     steps_per_token: int = 3
     position_lr: float = 0.08
     position_lr_decay: float = 0.75
@@ -285,7 +286,10 @@ class SpatialConnectome:
         capped = activity.clone()
         for region_id in (INPUT, SUBSTRATE, OUTPUT):
             indices = torch.where(self.region == region_id)[0]
-            limit = max(1, round(len(indices) * self.config.max_region_density))
+            density = self.config.max_region_density
+            if region_id == OUTPUT and self.config.max_output_density is not None:
+                density = self.config.max_output_density
+            limit = max(1, round(len(indices) * density))
             values = capped[indices]
             if torch.count_nonzero(values) > limit:
                 keep = torch.topk(values, limit).indices

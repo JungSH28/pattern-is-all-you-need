@@ -200,6 +200,27 @@ class SpatialConnectomeTests(unittest.TestCase):
         self.assertEqual(set(scores), set(self.model.output_assemblies))
         self.assertEqual(predicted, "animal")
 
+    def test_output_can_use_a_different_local_competition_density(self):
+        model = SpatialConnectome(
+            ConnectomeConfig(
+                n_input=24,
+                n_substrate=48,
+                n_output=24,
+                out_degree=12,
+                max_region_density=0.05,
+                max_output_density=0.25,
+                seed=9,
+            )
+        )
+        activity = torch.ones(model.config.n_units)
+        capped = model._cap_region_activity(activity)
+        self.assertEqual(
+            torch.count_nonzero(capped[model.region == SUBSTRATE]).item(), 2
+        )
+        self.assertEqual(
+            torch.count_nonzero(capped[model.region == OUTPUT]).item(), 6
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
