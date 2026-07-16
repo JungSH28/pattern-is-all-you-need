@@ -130,10 +130,15 @@ def evaluate(
     output_rounds: int = 20,
 ) -> MemoryOutputResult:
     categories = tuple(LABELED)
+    all_categories = (*categories, *tuple(LATER_LABELED))
 
     model = make_model(condition, seed, out_degree=out_degree)
+    # Motor seeds belong to a fixed language vocabulary. Register all category
+    # words before either learning session so later words cannot accidentally
+    # overlap and overwrite an older output assembly; no semantic association
+    # or category membership is supplied by this registration.
+    model.register_vocabulary(all_categories)
     learn_concepts(model, CONCEPTS)
-    model.register_vocabulary(categories)
     no_output_correct, _ = predictions(model, HELD_OUT, categories)
 
     output_edge = (model.region[model.src] == 1) & (model.region[model.dst] == 2)
@@ -158,7 +163,6 @@ def evaluate(
     learn_concepts(model, LATER_CONCEPTS)
     teach_outputs(model, LATER_LABELED, rounds=output_rounds)
     consolidate_and_erase_fast_state(model)
-    all_categories = (*categories, *tuple(LATER_LABELED))
     retained_correct, retained_margin = predictions(
         model, HELD_OUT, all_categories
     )
