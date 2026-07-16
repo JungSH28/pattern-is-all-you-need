@@ -63,6 +63,20 @@ cold = 공고화된 장기 연결·안정된 assembly
 - `A→B`와 `B→A`, 같은 마지막 토큰의 다른 앞 문맥이 서로 다른 hot 상태를 만듦
 - 초기 위치가 활동에 따라 움직이고 위치 가소성이 감소함
 - 국소 free/target phase 학습이 목표 출력 assembly의 활성을 높이고 warm 변화가 cold로 전달됨
+- **문맥 분기 goal 통과** (`context_branch_probe.py`, 20 seeds): 동일한 마지막 입력 B에 대해
+  `A,B→C`와 `D,B→E`를 동시에 학습했다. 성공은 두 출력 모두 top-1이고 두 R 상태 cosine<0.95인 경우로,
+  각 topology에서 80% 이상을 요구했다.
+
+| topology | 성공 | 평균 R-state cosine | 평균 연결 거리 |
+|---|---:|---:|---:|
+| random sparse | 20/20 | 0.399 | 0.628 |
+| distance-biased | 17/20 | 0.377 | 0.505 |
+| distance + position development | 18/20 | 0.370 | 0.493 |
+
+첫 구현(token당 5 내부 step)은 마지막 B가 앞 문맥을 지워 R cosine 0.92~0.97, 성공 0/5였다. 새로운
+기전을 더하지 않고 내부 step을 2로 줄여 transient를 보존하자 분기가 재현됐다. **거리 자체가 문맥 분기의
+필수조건은 아니며**, 배선 단축과 상태 분리를 주는 보조 prior다. 위치 발달은 distance-only보다 성공률과
+상태 분리를 조금 회복했지만 random의 분기 성공률을 넘지는 않았다.
 
 아직 검증하지 않은 범위는 범주 일반화, 장기 연속학습의 무망각, 다단계 사고, 자연어 대화다. 구조가 있다는
 것과 이 능력들이 생겼다는 것을 구분하며, 다음 단계에서 각 probe를 하나씩 통과시킨다.
@@ -70,6 +84,7 @@ cold = 공고화된 장기 연결·안정된 assembly
 ```bash
 python3 -m unittest -v test_spatial_connectome.py
 python3 spatial_connectome.py
+python3 context_branch_probe.py --seeds 20 --rounds 180 --verify
 ```
 
 ### 현재 성능 scaffold
