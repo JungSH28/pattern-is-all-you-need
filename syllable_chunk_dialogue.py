@@ -642,6 +642,7 @@ class ConnectomeSyllableDialogue:
         records: Sequence[tuple[str, Sequence[str]]],
         *,
         rounds: int = 40,
+        structural_plasticity: bool = True,
     ) -> tuple[str, ...]:
         """Ground the chunk repeated across an unsegmented fact episode."""
         if not records:
@@ -672,7 +673,12 @@ class ConnectomeSyllableDialogue:
             )
         )
         self.connectome.register_vocabulary(properties)
-        self.connectome.learn_sensory_concept(code, properties, rounds=rounds)
+        self.connectome.learn_sensory_concept(
+            code,
+            properties,
+            rounds=rounds,
+            structural_plasticity=structural_plasticity,
+        )
         self.concept_patterns[pattern] = code
         return pattern
 
