@@ -48,6 +48,19 @@ class SpatialConnectomeTests(unittest.TestCase):
         self.assertEqual(len(torch.unique(input_units)), len(input_units))
         self.assertEqual(len(torch.unique(output_units)), len(output_units))
 
+    def test_larger_vocabulary_never_reuses_exact_seed_assembly(self):
+        self.model.register_vocabulary(f"token_{index}" for index in range(80))
+        input_codes = {
+            tuple(sorted(units.tolist()))
+            for units in self.model.input_assemblies.values()
+        }
+        output_codes = {
+            tuple(sorted(units.tolist()))
+            for units in self.model.output_assemblies.values()
+        }
+        self.assertEqual(len(input_codes), len(self.model.input_assemblies))
+        self.assertEqual(len(output_codes), len(self.model.output_assemblies))
+
     def test_distance_changes_topology(self):
         self.assertLess(
             self.model.mean_edge_distance(), self.model.mean_allowed_distance()

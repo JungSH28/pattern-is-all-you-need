@@ -84,6 +84,8 @@ class SpatialConnectome:
         self.output_assemblies: dict[str, torch.Tensor] = {}
         self.input_seed_usage = torch.zeros(config.n_input, dtype=torch.long)
         self.output_seed_usage = torch.zeros(config.n_output, dtype=torch.long)
+        self.used_input_seed_sets: set[tuple[int, ...]] = set()
+        self.used_output_seed_sets: set[tuple[int, ...]] = set()
         self.query_gates: dict[str, torch.Tensor] = {}
         self.query_gate_usage = torch.zeros(config.n_substrate, dtype=torch.long)
 
@@ -186,18 +188,38 @@ class SpatialConnectome:
         # seeds over the least-used units, randomizing only within equal-usage
         # candidates. Semantic overlap must emerge in R rather than be injected
         # as an unstable accident at the sensory/motor boundary.
-        input_tie_break = torch.rand(c.n_input, generator=self.generator)
-        output_tie_break = torch.rand(c.n_output, generator=self.generator)
-        inp = torch.argsort(
-            self.input_seed_usage.float() + 1e-3 * input_tie_break
-        )[:k_input]
-        out = torch.argsort(
-            self.output_seed_usage.float() + 1e-3 * output_tie_break
-        )[:k_output]
+        inp = self._balanced_unique_seed(
+            self.input_seed_usage, k_input, self.used_input_seed_sets
+        )
+        out = self._balanced_unique_seed(
+            self.output_seed_usage, k_output, self.used_output_seed_sets
+        )
+        self.used_input_seed_sets.add(tuple(sorted(inp.tolist())))
+        self.used_output_seed_sets.add(tuple(sorted(out.tolist())))
         self.input_seed_usage[inp] += 1
         self.output_seed_usage[out] += 1
         self.input_assemblies[token] = inp
         self.output_assemblies[token] = out + c.n_input + c.n_substrate
+
+    def _balanced_unique_seed(
+        self,
+        usage: torch.Tensor,
+        count: int,
+        used: set[tuple[int, ...]],
+    ) -> torch.Tensor:
+        """Choose a least-used sparse seed without duplicating an assembly."""
+        for _ in range(256):
+            tie_break = torch.rand(len(usage), generator=self.generator)
+            units = torch.argsort(usage.float() + 1e-3 * tie_break)[:count]
+            if tuple(sorted(units.tolist())) not in used:
+                return units
+        # A duplicate after balanced attempts is unlikely at current sizes;
+        # unrestricted random fallback preserves uniqueness near saturation.
+        for _ in range(4096):
+            units = torch.randperm(len(usage), generator=self.generator)[:count]
+            if tuple(sorted(units.tolist())) not in used:
+                return units
+        raise RuntimeError("sparse token assembly space exhausted")
 
     def register_vocabulary(self, tokens: Iterable[str]) -> None:
         for token in tokens:
