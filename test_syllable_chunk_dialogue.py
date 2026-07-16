@@ -6,6 +6,7 @@ import torch
 from syllable_chunk_dialogue import (
     BioLocalSyllableDialogue,
     BioLocalTemporalChunker,
+    ConnectomeSyllableDialogue,
     FunctionalSyllableDialogue,
     FunctionalTemporalChunker,
     syllable_sequence,
@@ -43,7 +44,11 @@ class BoundaryFreeChunkTests(unittest.TestCase):
         self.assertTrue(torch.equal(changed, expected))
 
     def test_public_api_has_no_entity_query_or_candidate_argument(self):
-        for model_type in (FunctionalSyllableDialogue, BioLocalSyllableDialogue):
+        for model_type in (
+            FunctionalSyllableDialogue,
+            BioLocalSyllableDialogue,
+            ConnectomeSyllableDialogue,
+        ):
             answer = inspect.signature(model_type.answer).parameters
             teach = inspect.signature(model_type.teach_answer).parameters
             for forbidden in ("entity", "query", "intent", "candidates"):
@@ -59,12 +64,14 @@ class BoundaryFreeEndToEndTests(unittest.TestCase):
         self.assertTrue(bio_result(0).success)
 
     def test_locality_audit_exposes_local_rules_and_scaffolds(self):
-        audit = BioLocalSyllableDialogue.locality_audit()
+        audit = ConnectomeSyllableDialogue.locality_audit()
+        self.assertTrue(audit.single_connectome_memory_and_output)
         self.assertTrue(audit.local_temporal_synaptic_update)
         self.assertTrue(audit.local_semantic_coactivity_update)
         self.assertTrue(audit.local_output_pre_post_update)
         self.assertTrue(audit.query_control_from_learned_temporal_activity)
         self.assertTrue(audit.global_window_enumeration)
+        self.assertTrue(audit.global_fact_episode_intersection)
         self.assertTrue(audit.global_sparse_activity_competition)
         self.assertTrue(audit.global_output_argmax)
 

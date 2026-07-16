@@ -42,6 +42,18 @@ class SpatialConnectomeTests(unittest.TestCase):
         for unit in (0, self.model.config.n_input, self.model.config.n_units - 1):
             self.assertTrue(torch.equal(matrix[unit], self.model.outgoing_vector(unit)))
 
+    def test_learned_sensory_assembly_uses_connectome_input_region(self):
+        pattern = torch.zeros(self.model.config.n_input)
+        pattern[[1, 5, 9, 13]] = 1.0
+        state = self.model.sensory_assembly_state(pattern, steps=2)
+        gate = self.model.sensory_assembly_gate(pattern, fraction=0.5)
+        self.assertEqual(state.shape, (self.model.config.n_units,))
+        self.assertEqual(
+            int(gate[self.model.region == SUBSTRATE].sum().item()),
+            self.model.config.n_substrate // 2,
+        )
+        self.assertEqual(int(gate[self.model.region != SUBSTRATE].sum().item()), 0)
+
     def test_initial_token_seeds_avoid_accidental_overlap(self):
         input_units = torch.cat(list(self.model.input_assemblies.values()))
         output_units = torch.cat(list(self.model.output_assemblies.values()))
