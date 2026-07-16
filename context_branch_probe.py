@@ -57,8 +57,12 @@ def make_model(condition: str, seed: int) -> SpatialConnectome:
             n_output=48,
             out_degree=40,
             topology=topology,
-            steps_per_token=5,
-            max_region_density=0.16,
+            # Two internal steps preserve the first token's transient while
+            # still allowing B to recruit a context-specific conjunction.
+            # The prior five-step setting settled too far toward a B-dominated
+            # state (R cosine 0.92~0.97 across branches).
+            steps_per_token=2,
+            max_region_density=0.12,
             seed=seed,
         )
     )
