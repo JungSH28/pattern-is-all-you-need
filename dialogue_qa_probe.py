@@ -197,6 +197,7 @@ def make_bio_dialogue(
             seed,
             query_gate_fraction=query_gate_fraction,
             structural_rewire_mode="local_stochastic",
+            max_output_density=0.10,
         )
     )
     dialogue.register_queries(QUERIES)
