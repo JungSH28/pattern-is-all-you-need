@@ -430,7 +430,8 @@ def bio_result(
                 target,
                 structural_plasticity=iteration == 0,
             )
-        if iteration < replay_rounds:
+        replay_interval = max(1, answer_rounds // max(1, replay_rounds))
+        if iteration % replay_interval == 0:
             for text, target in base_questions:
                 model.teach_answer(text, target, learn_control=False)
     model.consolidate_and_clear()
@@ -474,7 +475,7 @@ def run_probe(seeds: int = 10, *, verbose: bool = True) -> list[SyllableDialogue
                     flush=True,
                 )
     print("\nsummary")
-    for track in ("functional_global", "bio_local"):
+    for track in ("functional_global", "bio_connectome_local"):
         group = [result for result in results if result.track == track]
         print(
             f"{track:17s} success={sum(r.success for r in group)}/{len(group)} "
@@ -499,7 +500,7 @@ def verify_goal(
     minimum_accuracy: float = 0.85,
     minimum_success_rate: float = 0.40,
 ) -> None:
-    for track in ("functional_global", "bio_local"):
+    for track in ("functional_global", "bio_connectome_local"):
         group = [result for result in results if result.track == track]
         if not group:
             raise AssertionError(f"missing track: {track}")
@@ -536,10 +537,12 @@ def verify_goal(
         if mean(result.later_chunks for result in group) < 0.85 * len(LATER_CONCEPTS):
             raise AssertionError(f"{track}: later word-like chunk recall")
 
-        if track == "bio_local":
+        if track == "bio_connectome_local":
             lesion = sum(result.warm_lesion_correct for result in group)
             if base - lesion < 0.15 * base_total:
-                raise AssertionError("bio_local: consolidation contribution")
+                raise AssertionError(
+                    "bio_connectome_local: consolidation contribution"
+                )
 
     audit = BioLocalSyllableDialogue.locality_audit().as_dict()
     required_local = {
