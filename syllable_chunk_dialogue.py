@@ -302,12 +302,14 @@ def _sparsify_and_normalize(activity: torch.Tensor, *, max_active: int) -> torch
 @dataclass(frozen=True)
 class SyllableLocalityAudit:
     boundary_free_syllable_input: bool
+    single_connectome_memory_and_output: bool
     local_temporal_synaptic_update: bool
     local_semantic_coactivity_update: bool
     local_output_pre_post_update: bool
     query_control_from_learned_temporal_activity: bool
     no_autograd_or_weight_transport: bool
     global_teacher_target: bool
+    global_fact_episode_intersection: bool
     global_window_enumeration: bool
     global_sparse_activity_competition: bool
     global_seed_balancing: bool
@@ -573,12 +575,14 @@ class BioLocalSyllableDialogue(_SyllableDialogueBase):
     def locality_audit() -> SyllableLocalityAudit:
         return SyllableLocalityAudit(
             boundary_free_syllable_input=True,
+            single_connectome_memory_and_output=False,
             local_temporal_synaptic_update=True,
             local_semantic_coactivity_update=True,
             local_output_pre_post_update=True,
             query_control_from_learned_temporal_activity=True,
             no_autograd_or_weight_transport=True,
             global_teacher_target=True,
+            global_fact_episode_intersection=False,
             global_window_enumeration=True,
             global_sparse_activity_competition=True,
             global_seed_balancing=True,
@@ -823,3 +827,21 @@ class ConnectomeSyllableDialogue:
         self.connectome.consolidate(cycles=cycles)
         self.connectome.warm.zero_()
         self.connectome.state.zero_()
+
+    @staticmethod
+    def locality_audit() -> SyllableLocalityAudit:
+        return SyllableLocalityAudit(
+            boundary_free_syllable_input=True,
+            single_connectome_memory_and_output=True,
+            local_temporal_synaptic_update=True,
+            local_semantic_coactivity_update=True,
+            local_output_pre_post_update=True,
+            query_control_from_learned_temporal_activity=True,
+            no_autograd_or_weight_transport=True,
+            global_teacher_target=True,
+            global_fact_episode_intersection=True,
+            global_window_enumeration=True,
+            global_sparse_activity_competition=True,
+            global_seed_balancing=True,
+            global_output_argmax=True,
+        )
