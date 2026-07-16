@@ -69,7 +69,7 @@ class Combiner(nn.Module):
             self.Bg = nn.Linear(d, r)
             self.A = nn.Linear(r, d, bias=False)
             self.Win = nn.Linear(d, d, bias=False)
-        elif mode in ("phase", "phase2"):
+        elif mode in ("phase", "phase2", "phase_pos"):
             # theta-gamma / binding-by-synchrony analogue (Fries 2005 communication-through-coherence;
             # von der Malsburg binding-by-synchrony) -- NOT a normalization mechanism, unlike every
             # other non-add mode above (softmax/divnorm/lateral all divide by a window-wide sum).
@@ -81,6 +81,14 @@ class Combiner(nn.Module):
             # phase2: extends this to real population coupling (window tokens' phases pull each other
             # via Kuramoto coupling, not just independently set by query match) -- real binding-by-
             # synchrony has mutually-entraining oscillators, not per-token-independent gating.
+            # phase_pos: order_probe.py found phase/phase2 are BOTH order-blind (no positional signal
+            # anywhere in q/k/v). real theta-gamma serial-order coding (Lisman & Idiart 1995; Jensen &
+            # Lisman 1996 working-memory model) nests each item's spike volley in a distinct gamma
+            # sub-cycle WITHIN the theta cycle by serial position -- phase encodes "when", not (as in
+            # "phase" above) "how well it matches". here: fixed per-slot phase offset pos_j=(pi/2)*j/(K-1)
+            # (j=0 is "now"/cur, j=K-1 is oldest) is ADDED to the content-match phase, so a token only
+            # gets high coherence gain if it matches AND arrives near the expected serial slot -- true
+            # binding-by-synchrony binds "what" (content phase) to "when" (position phase) in one gate.
             self.Wq = nn.Linear(d, d, bias=False)
             self.Wk = nn.Linear(d, d, bias=False)
             self.Wv = nn.Linear(d, d, bias=False)
@@ -157,10 +165,10 @@ class Combiner(nn.Module):
             phi = (math.pi / 2) * (1 - torch.sigmoid(self.beta * s))  # high match -> phi->0 (in-phase)
             w = torch.cos(phi) ** 2                               # Malus's law coherence gain, per-token
             mix = (w.unsqueeze(-1) * v).sum(1)                    # no sum(w) normalization
-        else:  # phase2: window-wide mutual coherence (Kuramoto population coupling), not per-token-
-            # independent gating. tokens with similar content pull each other's phase together (real
-            # assembly formation), then the settled phase (relative to query, phase=0 reference) sets
-            # the coherence gain -- same Malus's law readout as "phase", different phase *dynamics*.
+        elif self.mode == "phase2":  # window-wide mutual coherence (Kuramoto population coupling), not
+            # per-token-independent gating. tokens with similar content pull each other's phase together
+            # (real assembly formation), then the settled phase (relative to query, phase=0 reference)
+            # sets the coherence gain -- same Malus's law readout as "phase", different phase *dynamics*.
             q = self.Wq(cur).unsqueeze(1)
             k = self.Wk(emb)
             v = self.Wv(emb)
@@ -172,6 +180,18 @@ class Combiner(nn.Module):
                 dphi = (coup * torch.sin(phi.unsqueeze(1) - phi.unsqueeze(2))).mean(-1)
                 phi = phi + self.dt * dphi
             w = torch.cos(phi) ** 2                                     # coherence to query, post-settling
+            mix = (w.unsqueeze(-1) * v).sum(1)
+        else:  # phase_pos: theta-gamma serial-order code -- fixed per-slot phase offset (j=0 "now" ...
+            # j=K-1 oldest) ADDED to content-match phase. binds "what" (content) to "when" (serial
+            # position) in one coherence gate, unlike "phase"/"phase2" which are order-blind (order_probe.py).
+            q = self.Wq(cur).unsqueeze(1)
+            k = self.Wk(emb)
+            v = self.Wv(emb)
+            s = (q * k).sum(-1) / math.sqrt(d)
+            phi_content = (math.pi / 2) * (1 - torch.sigmoid(self.beta * s))
+            pos = torch.arange(K, device=emb.device, dtype=emb.dtype) * (math.pi / 2) / (K - 1)  # (K,)
+            phi = phi_content + pos.unsqueeze(0)                        # (B,K), broadcast position offset
+            w = torch.cos(phi) ** 2
             mix = (w.unsqueeze(-1) * v).sum(1)
         return self.head(torch.cat([cur, F.relu(mix)], -1))
 
@@ -249,4 +269,17 @@ if __name__ == "__main__":
         results2[f"phase2_b2.0_it{iters}"] = run("phase2", beta=2.0, iters=iters)
     print("=== SUMMARY (pass9) ===", flush=True)
     for mode, ppl in results2.items():
+        print(f"{mode:14s} BEST={ppl:.1f}", flush=True)
+    print("pass9 result: it=1->58.8 it=3->59.0 it=5->58.8 it=8->58.9 -- flat, NO improvement over phase", flush=True)
+    print("   alone (58.4). order_probe.py (structural, no training) found attn/divnorm/lateral/phase/", flush=True)
+    print("   phase2 ALL order-blind (window memory-slot shuffle -> Delta logit = 0.000000 exactly) --", flush=True)
+    print("   only add/gate/cmpgate/matmul see order. pass10: phase_pos -- theta-gamma SERIAL-ORDER code", flush=True)
+    print("   (Lisman-Idiart), fixed per-slot phase offset pos_j=(pi/2)*j/(K-1) ADDED to content-match", flush=True)
+    print("   phase, so gate = f(what AND when) not just f(what). confirmed order-sensitive structurally", flush=True)
+    print("   (order_probe: Delta=0.58). now test if it actually helps ppl.", flush=True)
+    results3 = {}
+    for beta in (1.0, 2.0, 4.0):
+        results3[f"phase_pos_b{beta}"] = run("phase_pos", beta=beta)
+    print("=== SUMMARY (pass10) ===", flush=True)
+    for mode, ppl in results3.items():
         print(f"{mode:14s} BEST={ppl:.1f}", flush=True)

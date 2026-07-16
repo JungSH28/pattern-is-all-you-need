@@ -16,7 +16,7 @@ ctx_perm[:, 1:] = ctx[:, perm]
 configs = [
     ("add", {}), ("gate", {}), ("cmpgate", {}), ("matmul", {}),
     ("attn", {}), ("divnorm", {"n": 2}), ("lateral", {"n": 2, "beta": 0.3}),
-    ("phase", {"beta": 2.0}), ("phase2", {"beta": 2.0, "iters": 5}),
+    ("phase", {"beta": 2.0}), ("phase2", {"beta": 2.0, "iters": 5}), ("phase_pos", {"beta": 2.0}),
 ]
 
 print(f"{'mode':10s} {'max|Δlogit|':>12s}  verdict")

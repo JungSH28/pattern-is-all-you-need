@@ -63,6 +63,7 @@ sparse code  →   fixed-random routing      →   Hebbian/local readout
 | — | phase(binding-by-synchrony, 정규화 아닌 위상결맞음 게이팅) | beta=2.0 **58.4 최고** — 정규화 계열 천장(59.4) 넘음, attn(57.4)과 격차 2p→1p로 좁힘 |
 | — | phase2(Kuramoto 상호결맞음, window 전체 population coupling) | it=1~8 전부 58.8~59.0 — **개선 없음**, phase 단독(58.4)보다 오히려 약간 나쁨 |
 | — | order_probe.py: window 순서 민감도 구조 검증 | **attn/divnorm/lateral/phase/phase2 전부 순서-blind**(memory 슬롯 뒤바꿔도 출력 완전동일, Δ=0) — add/gate/cmpgate/matmul만 순서 봄. attn 계열 우위는 "순서 활용"이 아니라 "content 기반 경쟁적 선택"이었음이 드러남 |
+| — | phase_pos(theta-gamma 순서코드: 고정 위치위상 + content위상 결합) | 구조적으론 order-sensitive(Δ=0.58) 확인됨 — 근데 beta=1.0/2.0/4.0 **59.7/60.3/61.1로 전부 phase 단독(58.4)보다 나쁨**. 순서정보 추가가 이 벤치마크(K=8 vocab2000, bigram위주)엔 오히려 해가 됨 |
 
 ---
 
@@ -199,6 +200,16 @@ BOT : oh wow! i hate that is so i hope he is very painful.
   이 관점에서 재검토 필요(순서정보 자체가 안 들어가므로). **새 레버 후보**: k_j에 위치신호(고정
   sinusoidal 등, 유전 prior 원칙과 부합) 추가 — 지금까지 어떤 attn류도 안 써본 축이라 attn(57.4)·
   phase(58.4) 둘 다 더 낮아질 여지 있음, 미시도.
+
+  **레버 시도 결과 — phase_pos, 실패.** theta-gamma serial-order 코드(Lisman & Idiart 1995): 슬롯
+  위치 j마다 고정 위상 오프셋 `pos_j=(π/2)·j/(K-1)`(j=0="지금"~j=K-1=가장 오래됨)을 content-match
+  위상에 더해 "무엇"과 "언제"를 한 게이트에 결합. order_probe로 구조적 order-sensitivity 확인(Δ=0.58,
+  phase/phase2는 0). **그러나 학습 결과: β=1.0→59.7 | β=2.0→60.3 | β=4.0→61.1, 전부 phase 단독
+  (58.4)보다 나쁨.** 고정 선형 위치감쇠가 이 벤치마크(K=8, vocab2000, bigram 위주)엔 유용 신호보다
+  노이즈로 작용한 것으로 보임 — 순서정보 자체는 넣었지만 감쇠 형태/스케일이 안 맞을 가능성, 또는
+  이 태스크가 애초에 순서보다 국소통계 의존이 커서(arc 반복 확인 사실) 순서 신호의 실익이 작을 가능성
+  둘 다 남음, 구분 안 됨. **현재 세션 최종 결론: phase(β=2.0, 58.4)가 이 arc의 non-attn 최고 기록으로
+  유지**, phase2·phase_pos 둘 다 개선 실패.
 
   **별도 축(구조레벨, design-principles ⑨) — 위 4갈래와 독립, 접어도 서로 안 막힘**: 입력/이성/출력
   3분할(이미 구현, Fedorenko 언어망-추론망 분리 근거)과 콜드-웜-핫 다중시간척도(부분구현, 웜→콜드 공고화
