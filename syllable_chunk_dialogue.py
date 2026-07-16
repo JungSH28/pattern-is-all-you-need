@@ -612,6 +612,18 @@ class ConnectomeSyllableDialogue:
             )
         )
         self.concept_patterns: dict[tuple[str, ...], torch.Tensor] = {}
+        self.control_generator = torch.Generator().manual_seed(seed + 303)
+        self.control_weights = 0.01 * torch.rand(
+            self.chunker.n_units,
+            self.connectome.config.n_substrate,
+            generator=self.control_generator,
+        )
+        self.control_usage = torch.zeros(self.connectome.config.n_substrate)
+        self.control_branches = torch.rand(
+            self.connectome.config.n_substrate,
+            self.connectome.config.n_substrate,
+            generator=self.control_generator,
+        )
 
     def register_syllable_vocabulary(self, texts: Iterable[str]) -> None:
         vocabulary = sorted(
@@ -698,6 +710,50 @@ class ConnectomeSyllableDialogue:
         control = torch.stack(controls).sum(0)
         return _sparsify_and_normalize(control, max_active=192)
 
+    def learn_query_control(
+        self,
+        text: str,
+        *,
+        learning_rate: float = 0.20,
+        fraction: float = 0.125,
+    ) -> torch.Tensor:
+        """Form a dendritic control assembly by local competitive Hebbian update."""
+        entity = self._entity_pattern(text)
+        control = self._control_pattern(text, entity)
+        drive = control @ self.control_weights - 0.02 * self.control_usage
+        count = max(1, round(len(drive) * fraction))
+        winners = torch.topk(drive, count).indices
+        postsynaptic = torch.zeros_like(drive)
+        postsynaptic[winners] = 1.0
+        # Only active presynaptic chunk units and winning dendritic branches
+        # change. Usage is a simulated local inhibitory/homeostatic trace.
+        self.control_weights.add_(
+            learning_rate * torch.outer(control, postsynaptic)
+        ).clamp_(0.0, 2.0)
+        self.control_usage.mul_(0.995).add_(postsynaptic)
+        return postsynaptic
+
+    def _learned_control_gate(
+        self,
+        text: str,
+        entity: tuple[str, ...],
+        *,
+        control_fraction: float = 0.125,
+        gate_fraction: float = 0.50,
+    ) -> torch.Tensor:
+        control = self._control_pattern(text, entity)
+        drive = control @ self.control_weights
+        control_count = max(1, round(len(drive) * control_fraction))
+        control_winners = torch.topk(drive, control_count).indices
+        control_state = torch.zeros_like(drive)
+        control_state[control_winners] = 1.0
+        branch_drive = control_state @ self.control_branches
+        gate_count = max(1, round(len(branch_drive) * gate_fraction))
+        winners = torch.topk(branch_drive, gate_count).indices
+        gate = torch.zeros(self.connectome.config.n_units)
+        gate[winners + self.connectome.config.n_input] = 1.0
+        return gate
+
     def bound_state(self, text: str, *, controlled: bool = True) -> torch.Tensor:
         entity = self._entity_pattern(text)
         entity_state = self.connectome.sensory_assembly_state(
@@ -706,8 +762,7 @@ class ConnectomeSyllableDialogue:
         bound = torch.zeros_like(entity_state)
         substrate = self.connectome.region == SUBSTRATE
         if controlled:
-            control = self._control_pattern(text, entity)
-            gate = self.connectome.sensory_assembly_gate(control, fraction=0.50)
+            gate = self._learned_control_gate(text, entity)
             bound[substrate] = entity_state[substrate] * gate[substrate]
         else:
             bound[substrate] = entity_state[substrate]
@@ -719,7 +774,10 @@ class ConnectomeSyllableDialogue:
         target: str,
         *,
         structural_plasticity: bool = False,
+        learn_control: bool = True,
     ) -> None:
+        if learn_control:
+            self.learn_query_control(text)
         self.connectome.learn_bound_output(
             self.bound_state(text),
             target,
