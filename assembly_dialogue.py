@@ -21,6 +21,7 @@ class LocalityAudit:
     local_state_propagation: bool
     local_synaptic_value_update: bool
     local_query_gate_application: bool
+    source_local_stochastic_rewiring: bool
     no_autograd_or_weight_transport: bool
     global_teacher_target: bool
     global_activity_competition: bool
@@ -160,9 +161,10 @@ class BioLocalAssemblyDialogue:
             local_state_propagation=True,
             local_synaptic_value_update=True,
             local_query_gate_application=True,
+            source_local_stochastic_rewiring=True,
             no_autograd_or_weight_transport=True,
             global_teacher_target=True,
             global_activity_competition=True,
-            global_structural_search=True,
+            global_structural_search=False,
             global_seed_and_gate_balancing=True,
         )

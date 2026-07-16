@@ -86,6 +86,7 @@ def make_model(
     *,
     out_degree: int = 192,
     query_gate_fraction: float = 0.50,
+    structural_rewire_mode: str = "weakest",
 ) -> SpatialConnectome:
     topology = "random" if condition == "random" else "distance"
     model = SpatialConnectome(
@@ -102,6 +103,7 @@ def make_model(
             max_output_density=0.10,
             initial_weight=0.08,
             query_gate_fraction=query_gate_fraction,
+            structural_rewire_mode=structural_rewire_mode,
             seed=seed,
         )
     )

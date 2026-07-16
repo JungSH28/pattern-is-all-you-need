@@ -221,6 +221,26 @@ class SpatialConnectomeTests(unittest.TestCase):
             torch.count_nonzero(capped[model.region == OUTPUT]).item(), 6
         )
 
+    def test_local_stochastic_rewiring_preserves_source_degree(self):
+        model = SpatialConnectome(
+            ConnectomeConfig(
+                n_input=24,
+                n_substrate=48,
+                n_output=24,
+                out_degree=12,
+                structural_rewire_mode="local_stochastic",
+                seed=11,
+            )
+        )
+        model.register_vocabulary(("cat", "fur", "animal"))
+        degree_before = torch.bincount(model.src, minlength=model.config.n_units)
+        model.learn_concept("cat", ("fur",), rounds=5)
+        model.learn_query_association(
+            "what_is", "cat", "animal", structural_plasticity=True
+        )
+        degree_after = torch.bincount(model.src, minlength=model.config.n_units)
+        self.assertTrue(torch.equal(degree_before, degree_after))
+
 
 if __name__ == "__main__":
     unittest.main()

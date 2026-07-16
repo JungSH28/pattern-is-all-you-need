@@ -196,6 +196,7 @@ def make_bio_dialogue(
             condition,
             seed,
             query_gate_fraction=query_gate_fraction,
+            structural_rewire_mode="local_stochastic",
         )
     )
     dialogue.register_queries(QUERIES)
@@ -420,16 +421,18 @@ def verify_goal(
         "local_state_propagation",
         "local_synaptic_value_update",
         "local_query_gate_application",
+        "source_local_stochastic_rewiring",
         "no_autograd_or_weight_transport",
     }
     expected_scaffolds = {
         "global_teacher_target",
         "global_activity_competition",
-        "global_structural_search",
         "global_seed_and_gate_balancing",
     }
     if not all(audit[name] for name in expected_local | expected_scaffolds):
         raise AssertionError("locality audit is incomplete")
+    if audit["global_structural_search"]:
+        raise AssertionError("dialogue track still uses global structural search")
 
 
 if __name__ == "__main__":

@@ -53,6 +53,7 @@ class ConnectomeConfig:
     recurrent_learning_scale: float = 0.10
     concept_rewire_per_input: int = 4
     output_rewire_per_source: int = 1
+    structural_rewire_mode: str = "weakest"
     query_gate_fraction: float = 0.50
     seed: int = 0
 
@@ -519,9 +520,25 @@ class SpatialConnectome:
             )[:number]
             replacement_pool = output_edges[~torch.isin(existing, target_units)]
             magnitude = (self.cold + self.warm).abs()[replacement_pool]
-            replacement = replacement_pool[
-                torch.topk(magnitude, number, largest=False).indices
-            ]
+            if self.config.structural_rewire_mode == "weakest":
+                replacement = replacement_pool[
+                    torch.topk(magnitude, number, largest=False).indices
+                ]
+            elif self.config.structural_rewire_mode == "local_stochastic":
+                prune_probability = 1.0 / (magnitude + 0.05)
+                replacement = replacement_pool[
+                    torch.multinomial(
+                        prune_probability,
+                        number,
+                        replacement=False,
+                        generator=self.generator,
+                    )
+                ]
+            else:
+                raise ValueError(
+                    f"unknown structural_rewire_mode: "
+                    f"{self.config.structural_rewire_mode}"
+                )
             self.dst[replacement] = candidates[selected]
             self.cold[replacement] = 0.0
             self.warm[replacement] = self.config.initial_weight
@@ -663,10 +680,23 @@ class SpatialConnectome:
             )
             new_destinations = candidates[selected]
 
-            # Replace edges least useful for the observed property assembly.
-            replacement = torch.topk(
-                target[existing], number, largest=False
-            ).indices
+            if self.config.structural_rewire_mode == "weakest":
+                replacement = torch.topk(
+                    target[existing], number, largest=False
+                ).indices
+            elif self.config.structural_rewire_mode == "local_stochastic":
+                prune_probability = 1.0 / (target[existing] + 0.05)
+                replacement = torch.multinomial(
+                    prune_probability,
+                    number,
+                    replacement=False,
+                    generator=self.generator,
+                )
+            else:
+                raise ValueError(
+                    f"unknown structural_rewire_mode: "
+                    f"{self.config.structural_rewire_mode}"
+                )
             edge_indices = source_edges[replacement]
             self.dst[edge_indices] = new_destinations
             self.cold[edge_indices] = self.config.initial_weight
