@@ -604,7 +604,7 @@ class ConnectomeSyllableDialogue:
                 out_degree=192,
                 topology="random",
                 steps_per_token=2,
-                max_region_density=0.05,
+                max_region_density=0.18,
                 max_output_density=0.10,
                 initial_weight=0.08,
                 structural_rewire_mode="local_stochastic",
@@ -722,7 +722,7 @@ class ConnectomeSyllableDialogue:
         *,
         learning_rate: float = 0.20,
         novelty_threshold: float = 0.80,
-        gate_fraction: float = 0.50,
+        gate_fraction: float = 0.125,
     ) -> torch.Tensor:
         """Recruit or update an unlabeled competitive control assembly."""
         entity = self._entity_pattern(text)
