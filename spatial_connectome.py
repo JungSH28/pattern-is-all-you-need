@@ -50,6 +50,7 @@ class ConnectomeConfig:
     consolidation_rate: float = 0.08
     warm_decay: float = 0.90
     recurrent_learning_scale: float = 0.10
+    concept_rewire_per_input: int = 4
     seed: int = 0
 
     @property
@@ -195,6 +196,23 @@ class SpatialConnectome:
         pattern[self.output_assemblies[token]] = 1.0
         return pattern
 
+    def simultaneous_state(
+        self, tokens: Sequence[str], *, steps: int = 2
+    ) -> torch.Tensor:
+        """Evoked state for co-present sensory properties.
+
+        This represents observing an entity and several properties together,
+        rather than a temporal language sequence. It is the target phase used
+        to organize an entity assembly before any category label is supplied.
+        """
+        sensory = torch.zeros(self.config.n_units)
+        for token in tokens:
+            sensory = torch.maximum(sensory, self.sensory_pattern(token))
+        state = torch.zeros_like(sensory)
+        for _ in range(steps):
+            state = self.step(state, sensory=sensory)
+        return state
+
     @staticmethod
     def assembly_cosine(left: torch.Tensor, right: torch.Tensor) -> float:
         """Representational similarity; deliberately independent of 3-D distance."""
@@ -298,8 +316,111 @@ class SpatialConnectome:
             self.region[self.dst] == SUBSTRATE
         )
         delta[recurrent_edge] *= self.config.recurrent_learning_scale
-        self.warm.add_(learning_rate * delta).clamp_(min=0.0, max=1.5)
+        # Warm plasticity is signed: positive change is LTP and negative change
+        # is LTD. Dale's law constrains the sign of the effective outgoing
+        # synapse, while its non-negative magnitude may strengthen or weaken.
+        self.warm.add_(learning_rate * delta).clamp_(min=-1.5, max=1.5)
         return float(delta.abs().mean().item())
+
+    def learn_concept(
+        self,
+        entity: str,
+        properties: Sequence[str],
+        *,
+        rounds: int = 40,
+        learning_rate: float = 0.30,
+        settle_steps: int = 2,
+        consolidate_every: int = 10,
+    ) -> None:
+        """Organize an entity assembly from co-present property assemblies.
+
+        The entity receives no category label. Its active sensory units provide
+        the presynaptic factor; each existing I->R synapse sees only the local
+        difference between the property's target-phase activity and the
+        entity-only free phase at its postsynaptic R unit. This is a local
+        delta/contrastive rule on the same connectome edge list.
+        """
+        entity_sensory = self.sensory_pattern(entity)
+        entity_edge = (
+            (self.region[self.src] == INPUT)
+            & (self.region[self.dst] == SUBSTRATE)
+            & (entity_sensory[self.src] > 0)
+        )
+        target = self.simultaneous_state(properties, steps=settle_steps)
+        self._rewire_concept_inputs(entity_sensory, target)
+        # Recompute after structural plasticity changed destinations.
+        entity_edge = (
+            (self.region[self.src] == INPUT)
+            & (self.region[self.dst] == SUBSTRATE)
+            & (entity_sensory[self.src] > 0)
+        )
+        for iteration in range(rounds):
+            free = self.simultaneous_state((entity,), steps=settle_steps)
+            target = self.simultaneous_state(properties, steps=settle_steps)
+            delta = torch.zeros_like(self.warm)
+            delta[entity_edge] = (
+                target[self.dst[entity_edge]] - free[self.dst[entity_edge]]
+            )
+            self.warm.add_(learning_rate * delta).clamp_(min=-1.5, max=1.5)
+            if iteration % consolidate_every == 0:
+                self.consolidate()
+
+    def _rewire_concept_inputs(
+        self, entity_sensory: torch.Tensor, target: torch.Tensor
+    ) -> None:
+        """Form a few coactivity-driven I->R synapses at fixed out-degree.
+
+        Each active entity input unit replaces existing edges whose targets are
+        least active in the property phase. New targets must be active R units;
+        distance supplies a wiring prior only in spatial topology conditions.
+        The operation preserves the number of edges per source and never uses a
+        category label.
+        """
+        count = self.config.concept_rewire_per_input
+        if count <= 0:
+            return
+        active_inputs = torch.where(
+            (self.region == INPUT) & (entity_sensory > 0)
+        )[0]
+        active_targets = torch.where(
+            (self.region == SUBSTRATE) & (target > 0)
+        )[0]
+        for source in active_inputs.tolist():
+            source_edges = torch.where(
+                (self.src == source) & (self.region[self.dst] == SUBSTRATE)
+            )[0]
+            existing = self.dst[source_edges]
+            available_mask = ~torch.isin(active_targets, existing)
+            candidates = active_targets[available_mask]
+            number = min(count, len(candidates), len(source_edges))
+            if number == 0:
+                continue
+
+            probability = target[candidates].clamp_min(1e-6)
+            if self.config.topology == "distance":
+                distance = torch.linalg.vector_norm(
+                    self.positions[candidates] - self.positions[source], dim=1
+                )
+                probability = probability * (
+                    torch.exp(-distance / self.config.distance_scale)
+                    + self.config.long_range_floor
+                )
+            selected = torch.multinomial(
+                probability,
+                number,
+                replacement=False,
+                generator=self.generator,
+            )
+            new_destinations = candidates[selected]
+
+            # Replace edges least useful for the observed property assembly.
+            replacement = torch.topk(
+                target[existing], number, largest=False
+            ).indices
+            edge_indices = source_edges[replacement]
+            self.dst[edge_indices] = new_destinations
+            self.cold[edge_indices] = self.config.initial_weight
+            self.warm[edge_indices] = 0.0
 
     def consolidate(self) -> None:
         """Transfer fast synaptic change into the slow variable on each edge."""

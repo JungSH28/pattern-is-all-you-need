@@ -104,7 +104,21 @@ class SpatialConnectomeTests(unittest.TestCase):
         warm_before = self.model.warm.clone()
         self.model.consolidate()
         self.assertGreater(torch.linalg.vector_norm(self.model.cold - cold_before).item(), 0)
-        self.assertLess(self.model.warm.sum().item(), warm_before.sum().item())
+        self.assertLess(
+            self.model.warm.abs().sum().item(), warm_before.abs().sum().item()
+        )
+
+    def test_property_learning_changes_entity_assembly(self):
+        self.model.register_vocabulary(["fur", "fourlegs"])
+        before = self.model.simultaneous_state(("cat",))
+        destinations_before = self.model.dst.clone()
+        self.model.learn_concept("cat", ("fur", "fourlegs"), rounds=20)
+        after = self.model.simultaneous_state(("cat",))
+        self.assertGreater(torch.linalg.vector_norm(after - before).item(), 1e-4)
+        self.assertGreater(
+            torch.count_nonzero(self.model.dst != destinations_before).item(), 0
+        )
+        self.assertEqual(len(self.model.src), len(destinations_before))
 
     def test_local_learning_increases_target_output(self):
         before_state = self.model.run_sequence(["a", "b"])
