@@ -207,6 +207,7 @@ def bio_result(
     *,
     answer_rounds: int = 20,
     query_gate_fraction: float = 0.50,
+    replay_every: int = 4,
 ) -> DialogueResult:
     base_expected = expected_answers(HELD_OUT)
     dialogue = make_bio_dialogue(
@@ -233,10 +234,7 @@ def bio_result(
     observe_facts(dialogue, LATER_CONCEPTS)
     # Interleaved cortical replay: new answers remain the dominant experience,
     # while old query/answer traces are reactivated every fourth round.
-    teach_later_with_replay(
-        dialogue,
-        rounds=answer_rounds,
-    )
+    teach_later_with_replay(dialogue, rounds=answer_rounds, replay_every=replay_every)
     dialogue.consolidate_and_clear()
     retained_correct, retained_margin = score_answers(dialogue, base_expected)
     later_correct, _ = score_answers(
@@ -279,6 +277,7 @@ def run_probe(
     *,
     answer_rounds: int = 20,
     query_gate_fraction: float = 0.50,
+    replay_every: int = 4,
     verbose: bool = True,
 ) -> list[DialogueResult]:
     results = []
@@ -300,6 +299,7 @@ def run_probe(
                 seed,
                 answer_rounds=answer_rounds,
                 query_gate_fraction=query_gate_fraction,
+                replay_every=replay_every,
             )
             results.append(result)
             if verbose:
@@ -418,6 +418,7 @@ if __name__ == "__main__":
     parser.add_argument("--seeds", type=int, default=10)
     parser.add_argument("--answer-rounds", type=int, default=20)
     parser.add_argument("--query-gate-fraction", type=float, default=0.50)
+    parser.add_argument("--replay-every", type=int, default=4)
     parser.add_argument("--verify", action="store_true")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
@@ -425,6 +426,7 @@ if __name__ == "__main__":
         seeds=args.seeds,
         answer_rounds=args.answer_rounds,
         query_gate_fraction=args.query_gate_fraction,
+        replay_every=args.replay_every,
         verbose=not args.quiet,
     )
     if args.verify:
