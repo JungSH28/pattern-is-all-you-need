@@ -537,6 +537,7 @@ def verify_goal(
         "local_semantic_coactivity_update",
         "local_output_pre_post_update",
         "query_control_from_learned_temporal_activity",
+        "local_query_control_prototype_update",
         "no_autograd_or_weight_transport",
     }
     required_scaffolds = {

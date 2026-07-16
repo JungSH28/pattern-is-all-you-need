@@ -70,6 +70,7 @@ class BoundaryFreeEndToEndTests(unittest.TestCase):
         self.assertTrue(audit.local_semantic_coactivity_update)
         self.assertTrue(audit.local_output_pre_post_update)
         self.assertTrue(audit.query_control_from_learned_temporal_activity)
+        self.assertTrue(audit.local_query_control_prototype_update)
         self.assertTrue(audit.global_window_enumeration)
         self.assertTrue(audit.global_fact_episode_intersection)
         self.assertTrue(audit.global_sparse_activity_competition)
