@@ -186,8 +186,16 @@ def functional_result(seed: int) -> DialogueResult:
     )
 
 
-def make_bio_dialogue(condition: str, seed: int) -> BioLocalAssemblyDialogue:
-    dialogue = BioLocalAssemblyDialogue(make_model(condition, seed))
+def make_bio_dialogue(
+    condition: str, seed: int, *, query_gate_fraction: float
+) -> BioLocalAssemblyDialogue:
+    dialogue = BioLocalAssemblyDialogue(
+        make_model(
+            condition,
+            seed,
+            query_gate_fraction=query_gate_fraction,
+        )
+    )
     dialogue.register_queries(QUERIES)
     dialogue.register_vocabulary(DISTRACTORS)
     return dialogue
@@ -198,9 +206,12 @@ def bio_result(
     seed: int,
     *,
     answer_rounds: int = 20,
+    query_gate_fraction: float = 0.50,
 ) -> DialogueResult:
     base_expected = expected_answers(HELD_OUT)
-    dialogue = make_bio_dialogue(condition, seed)
+    dialogue = make_bio_dialogue(
+        condition, seed, query_gate_fraction=query_gate_fraction
+    )
     observe_facts(dialogue, CONCEPTS)
     no_learning, _ = score_answers(dialogue, base_expected)
     teach_answers(
@@ -233,7 +244,9 @@ def bio_result(
     )
     del dialogue
 
-    no_structural = make_bio_dialogue(condition, seed)
+    no_structural = make_bio_dialogue(
+        condition, seed, query_gate_fraction=query_gate_fraction
+    )
     observe_facts(no_structural, CONCEPTS)
     teach_answers(
         no_structural,
@@ -265,6 +278,7 @@ def run_probe(
     seeds: int = 10,
     *,
     answer_rounds: int = 20,
+    query_gate_fraction: float = 0.50,
     verbose: bool = True,
 ) -> list[DialogueResult]:
     results = []
@@ -285,6 +299,7 @@ def run_probe(
                 condition,
                 seed,
                 answer_rounds=answer_rounds,
+                query_gate_fraction=query_gate_fraction,
             )
             results.append(result)
             if verbose:
@@ -402,12 +417,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--seeds", type=int, default=10)
     parser.add_argument("--answer-rounds", type=int, default=20)
+    parser.add_argument("--query-gate-fraction", type=float, default=0.50)
     parser.add_argument("--verify", action="store_true")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
     probe_results = run_probe(
         seeds=args.seeds,
         answer_rounds=args.answer_rounds,
+        query_gate_fraction=args.query_gate_fraction,
         verbose=not args.quiet,
     )
     if args.verify:

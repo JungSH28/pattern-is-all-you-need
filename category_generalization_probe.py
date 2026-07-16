@@ -81,7 +81,11 @@ def vocabulary() -> tuple[str, ...]:
 
 
 def make_model(
-    condition: str, seed: int, *, out_degree: int = 192
+    condition: str,
+    seed: int,
+    *,
+    out_degree: int = 192,
+    query_gate_fraction: float = 0.50,
 ) -> SpatialConnectome:
     topology = "random" if condition == "random" else "distance"
     model = SpatialConnectome(
@@ -96,6 +100,7 @@ def make_model(
             steps_per_token=2,
             max_region_density=0.05,
             initial_weight=0.08,
+            query_gate_fraction=query_gate_fraction,
             seed=seed,
         )
     )
