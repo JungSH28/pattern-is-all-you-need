@@ -24,6 +24,8 @@ from typing import Iterable, Sequence
 
 import torch
 
+from spatial_connectome import SUBSTRATE, ConnectomeConfig, SpatialConnectome
+
 
 def syllable_sequence(text: str) -> tuple[str, ...]:
     """Mechanical Unicode normalization only; no linguistic segmentation."""
@@ -582,3 +584,156 @@ class BioLocalSyllableDialogue(_SyllableDialogueBase):
             global_seed_balancing=True,
             global_output_argmax=True,
         )
+
+
+class ConnectomeSyllableDialogue:
+    """Temporal chunks connected to the existing single I/R/O connectome.
+
+    Supervised fact episodes group several unsegmented utterances about one
+    object. Their recurrent common chunk acts as the absent environmental
+    object identity; neither its character span nor a word label is supplied.
+    """
+
+    def __init__(self, *, seed: int = 0):
+        self.chunker = BioLocalTemporalChunker(seed=seed)
+        self.connectome = SpatialConnectome(
+            ConnectomeConfig(
+                n_input=self.chunker.n_units,
+                n_substrate=512,
+                n_output=64,
+                out_degree=192,
+                topology="random",
+                steps_per_token=2,
+                max_region_density=0.05,
+                max_output_density=0.10,
+                initial_weight=0.08,
+                structural_rewire_mode="local_stochastic",
+                seed=seed,
+            )
+        )
+        self.concept_patterns: dict[tuple[str, ...], torch.Tensor] = {}
+
+    def register_syllable_vocabulary(self, texts: Iterable[str]) -> None:
+        vocabulary = sorted(
+            {
+                syllable
+                for text in texts
+                for syllable in syllable_sequence(text)
+            }
+        )
+        self.chunker.register_syllables(vocabulary)
+
+    def register_output_vocabulary(self, tokens: Iterable[str]) -> None:
+        self.connectome.register_vocabulary(tokens)
+
+    def observe_streams(self, texts: Iterable[str], *, temporal: bool = True) -> None:
+        for text in texts:
+            self.chunker.observe(text, plastic=temporal)
+
+    def finalize_chunks(self) -> None:
+        self.chunker.finalize()
+
+    def observe_fact_episode(
+        self,
+        records: Sequence[tuple[str, Sequence[str]]],
+        *,
+        rounds: int = 40,
+    ) -> tuple[str, ...]:
+        """Ground the chunk repeated across an unsegmented fact episode."""
+        if not records:
+            raise ValueError("fact episode must not be empty")
+        winners = [
+            {pattern for pattern, _, _ in self.chunker.winning_codes(text)}
+            for text, _ in records
+        ]
+        common = set.intersection(*winners)
+        if not common:
+            raise RuntimeError("fact episode has no recurrent learned chunk")
+        # Longest recurrent chunk wins; score resolves equal-length ambiguity.
+        pattern = max(
+            common,
+            key=lambda item: (
+                len(item),
+                self.chunker.learned_patterns.get(item, 0.0),
+            ),
+        )
+        code = self.chunker.pattern_code(pattern)
+        if code is None:
+            raise RuntimeError("recurrent fact chunk has no assembly")
+        properties = tuple(
+            dict.fromkeys(
+                property_name
+                for _, targets in records
+                for property_name in targets
+            )
+        )
+        self.connectome.register_vocabulary(properties)
+        self.connectome.learn_sensory_concept(code, properties, rounds=rounds)
+        self.concept_patterns[pattern] = code
+        return pattern
+
+    def _entity_pattern(self, text: str) -> tuple[str, ...]:
+        sequence = syllable_sequence(text)
+        present = [
+            pattern
+            for pattern in self.concept_patterns
+            if _occurrences(sequence, pattern)
+        ]
+        if not present:
+            raise RuntimeError("question contains no learned concept chunk")
+        return max(present, key=len)
+
+    def _control_pattern(self, text: str, entity: tuple[str, ...]) -> torch.Tensor:
+        controls = []
+        for pattern, code, _ in self.chunker.matched_codes(text):
+            if not 2 <= len(pattern) <= 3:
+                continue
+            if pattern == entity or _occurrences(entity, pattern):
+                continue
+            if pattern in self.concept_patterns:
+                continue
+            controls.append(code)
+        if not controls:
+            return self.chunker.feature(text, temporal=False)
+        control = torch.stack(controls).sum(0)
+        return _sparsify_and_normalize(control, max_active=192)
+
+    def bound_state(self, text: str, *, controlled: bool = True) -> torch.Tensor:
+        entity = self._entity_pattern(text)
+        entity_state = self.connectome.sensory_assembly_state(
+            self.concept_patterns[entity], steps=2
+        )
+        bound = torch.zeros_like(entity_state)
+        substrate = self.connectome.region == SUBSTRATE
+        if controlled:
+            control = self._control_pattern(text, entity)
+            gate = self.connectome.sensory_assembly_gate(control, fraction=0.50)
+            bound[substrate] = entity_state[substrate] * gate[substrate]
+        else:
+            bound[substrate] = entity_state[substrate]
+        return bound
+
+    def teach_answer(
+        self,
+        text: str,
+        target: str,
+        *,
+        structural_plasticity: bool = False,
+    ) -> None:
+        self.connectome.learn_bound_output(
+            self.bound_state(text),
+            target,
+            structural_plasticity=structural_plasticity,
+        )
+
+    def answer(
+        self, text: str, *, controlled: bool = True
+    ) -> tuple[str, float, dict[str, float]]:
+        return self.connectome.predict_bound_output(
+            self.bound_state(text, controlled=controlled)
+        )
+
+    def consolidate_and_clear(self, *, cycles: int = 100) -> None:
+        self.connectome.consolidate(cycles=cycles)
+        self.connectome.warm.zero_()
+        self.connectome.state.zero_()
