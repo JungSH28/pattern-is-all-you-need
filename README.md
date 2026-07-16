@@ -5,7 +5,7 @@ backprop이 아닌 생물학적으로 그럴듯한 국소 규칙으로 한다.**
 아니라, 하나의 sparse connectome에서 문맥·범주화·장기기억·조합/사고가 일어나고 그 내부 능력이 언어
 입출력을 통해 드러나는 모델을 만드는 것이다. **간단한 대화**는 최종 정의가 아니라 첫 외부 이정표다.
 
-> 상세한 과정·근거·기각한 길은 위키 `research/pattern-is-all-you-need.md`(#1~#24) 참조. 이 README는
+> 상세한 과정·근거·기각한 길은 위키 `research/pattern-is-all-you-need.md`(#1~#27) 참조. 이 README는
 > 현 상태와 재현법의 요약이다.
 
 ### 목표의 층위
@@ -69,9 +69,9 @@ cold = 공고화된 장기 연결·안정된 assembly
 
 | topology | 성공 | 평균 R-state cosine | 평균 연결 거리 |
 |---|---:|---:|---:|
-| random sparse | 19/20 | 0.468 | 0.628 |
-| distance-biased | 17/20 | 0.505 | 0.505 |
-| distance + position development | 17/20 | 0.497 | 0.493 |
+| random sparse | 19/20 | 0.620 | 0.628 |
+| distance-biased | 18/20 | 0.352 | 0.505 |
+| distance + position development | 20/20 | 0.445 | 0.493 |
 
 첫 구현(token당 5 내부 step)은 마지막 B가 앞 문맥을 지워 R cosine 0.92~0.97, 성공 0/5였다. 새로운
 기전을 더하지 않고 내부 step을 2로 줄여 transient를 보존하자 분기가 재현됐다. **거리 자체가 문맥 분기의
@@ -84,25 +84,51 @@ cosine으로 분류했다. 각 held-out은 공통 속성 2개와 새 속성 1개
 
 | topology | 완벽 seed | held-out | 무학습 | labeled-only | 속성교환 | R cosine gap |
 |---|---:|---:|---:|---:|---:|---:|
-| random sparse | 19/20 | **79/80** | 44/80 | 38/80 | **78/80** | +0.267 |
-| distance-biased | 20/20 | **80/80** | 48/80 | 45/80 | **76/80** | +0.270 |
-| distance + position development | 17/20 | **76/80** | 37/80 | 48/80 | **73/80** | +0.193 |
+| random sparse | 20/20 | **80/80** | 41/80 | 43/80 | **80/80** | +0.320 |
+| distance-biased | 20/20 | **80/80** | 42/80 | 41/80 | **80/80** | +0.328 |
+| distance + position development | 20/20 | **80/80** | 42/80 | 42/80 | **80/80** | +0.302 |
 
 `labeled-only`는 prototype 개체만 속성학습하고 held-out은 무작위로 둔 통제다. `속성교환`은 wolf 같은 이름은
 유지하면서 vehicle 속성을 주었을 때 예측이 vehicle로 뒤집히는지를 센다. 따라서 결과는 이름 우연이나
 prototype 조직만으로 설명되지 않는다. 돌파구는 (1) property target과 entity free 상태 차이를 쓰는 국소
 I→R delta(LTP+LTD), (2) 공동활성 R 유닛으로 입력당 4개 시냅스를 만들되 총 out-degree는 유지하는 구조
-가소성, (3) 감각 seed 충돌을 줄인 충분한 입력 공간이었다.
+가소성, (3) 감각 seed를 최소사용 I/O 유닛에 균형 배치해 우연한 충돌과 타 단어 경로 덮어쓰기를 막은
+것이었다. 이 마지막 변경 뒤 범주 회귀는 세 topology 모두 80/80으로 안정화됐다.
 
-이 결과가 증명한 것은 **합성 속성 경험으로 형성된 내부 범주 geometry와 held-out 전이**다. category 단어를
-출력하는 언어 head, 자연어에서 속성 추출, 계층적 범주화는 아직 증명하지 않았다. 아직 검증하지 않은 큰
-범위는 장기 연속학습의 무망각, 다단계 사고, 자연어 대화다.
+**범주 장기기억·언어출력 goal 통과** (`category_memory_output_probe.py`, 20 seeds). 사용자가 정한 goal은
+> "범주 표상을 장기 기억과 언어 출력에 연결"
+
+이었다. animal/vehicle 출력 target은 cat/dog/horse와 car/bus/van에만 주고, wolf/fox/truck/bike에는 끝까지
+범주 target을 주지 않았다. 활성된 흥분성 R 유닛마다 목표 O assembly로 가장 약한 R→O 시냅스 하나를
+교체하고, 한 번 더 전파한 O의 실제 활성에서 `pre_R × (teacher_O - post_O)` 국소 delta를 학습했다. 새
+시냅스는 warm에서 시작하며 총 out-degree는 변하지 않는다. 이후 100회 공고화하고 warm·hot을 0으로 지운
+뒤, cosine prototype head 없이 O assembly 합의 top-1을 실제 출력 토큰으로 읽었다.
+
+| topology | 완벽 seed | cold-only | 출력 미학습 | 공고화 전 warm 제거 | labeled-only | 속성교환 | 후속학습 뒤 보존 | 새 범주 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| random sparse | 16/20 | **80/80** | 42/80 | 45/80 | 43/80 | **80/80** | **77/80** | **39/40** |
+| distance-biased | 10/20 | **79/80** | 38/80 | 36/80 | 46/80 | **79/80** | **68/80** | **38/40** |
+| distance + position development | 10/20 | **80/80** | 36/80 | 37/80 | 40/80 | **78/80** | **69/80** | **37/40** |
+
+완벽 seed는 cold 4개, 후속학습 뒤 기존 4개, 새 held-out 2개를 모두 맞힌 경우다. 두 번째 세션에서는
+fruit/tool prototype만 출력 label을 받고 peach/drill은 속성만 학습했다. 기존 항목도 animal/vehicle만이
+아니라 네 출력 단어 전체와 경쟁하므로 닫힌 옛 decoder를 재사용한 결과가 아니다. 공고화 전 warm 제거는
+chance 부근이지만 공고화 후 cold-only는 98.8~100%였고, 같은 이름의 속성을 반대로 주면 출력 단어도
+97.5~100% 뒤집혔다. 따라서 저장된 것은 이름별 category 답표가 아니라 범주 R geometry에서 O 언어
+assembly로 가는 연결이다.
+
+후속학습 뒤 보존은 85.0~96.3%로 verifier 하한은 통과했지만 완전 무망각은 아니다. 현재 출력은 주어진 범주
+어휘 중 한 토큰을 고르는 실제 O-assembly readout이며 자유 문장 생성은 아니다. 합성 속성 대신 자연어에서
+속성을 추출하는 능력, 질의 문맥(`wolf는 무엇인가?`) 처리, 여러 토큰 문장 생성, 계층·다중라벨 범주는 아직
+증명하지 않았다. 출력 반복을 20회보다 늘리면 포화로 간섭이 커졌고, 고정 out-degree에서 O를 64→128로
+늘리면 R 재귀 연결 몫이 줄어 성능이 악화되어 둘 다 기각했다.
 
 ```bash
 python3 -m unittest -v test_spatial_connectome.py
 python3 spatial_connectome.py
 python3 context_branch_probe.py --seeds 20 --rounds 180 --verify
 python3 category_generalization_probe.py --seeds 20 --verify --quiet
+python3 category_memory_output_probe.py --seeds 20 --verify --quiet
 ```
 
 ### 현재 성능 scaffold
