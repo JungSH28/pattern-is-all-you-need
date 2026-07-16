@@ -36,6 +36,7 @@ class ConnectomeConfig:
     out_degree: int = 16
     long_range_floor: float = 0.03
     distance_scale: float = 0.22
+    topology: str = "distance"
     excitatory_fraction: float = 0.8
     initial_weight: float = 0.18
     threshold: float = 0.08
@@ -48,6 +49,7 @@ class ConnectomeConfig:
     repulsion_strength: float = 0.03
     consolidation_rate: float = 0.08
     warm_decay: float = 0.90
+    recurrent_learning_scale: float = 0.10
     seed: int = 0
 
     @property
@@ -131,7 +133,12 @@ class SpatialConnectome:
             distance = torch.linalg.vector_norm(
                 self.positions[candidates] - self.positions[source], dim=1
             )
-            probability = torch.exp(-distance / c.distance_scale) + c.long_range_floor
+            if c.topology == "distance":
+                probability = torch.exp(-distance / c.distance_scale) + c.long_range_floor
+            elif c.topology == "random":
+                probability = torch.ones_like(distance)
+            else:
+                raise ValueError(f"unknown topology: {c.topology}")
             count = min(c.out_degree, len(candidates))
             selected = torch.multinomial(
                 probability, count, replacement=False, generator=self.generator
@@ -275,6 +282,22 @@ class SpatialConnectome:
         free_corr = free[self.src] * free[self.dst]
         nudged_corr = nudged[self.src] * nudged[self.dst]
         delta = self.signs * (nudged_corr - free_corr)
+
+        # A target output supplies a local postsynaptic error. R->O synapses
+        # combine it with their own presynaptic context activity; this is the
+        # minimal branch-specific rule needed for AB->C and DB->E. Recurrent
+        # edges still receive the weaker contrastive update above.
+        output_edge = self.region[self.dst] == OUTPUT
+        output_error = target_pattern[self.dst] - free[self.dst]
+        delta[output_edge] = (
+            self.signs[output_edge]
+            * free[self.src[output_edge]]
+            * output_error[output_edge]
+        )
+        recurrent_edge = (self.region[self.src] == SUBSTRATE) & (
+            self.region[self.dst] == SUBSTRATE
+        )
+        delta[recurrent_edge] *= self.config.recurrent_learning_scale
         self.warm.add_(learning_rate * delta).clamp_(min=0.0, max=1.5)
         return float(delta.abs().mean().item())
 

@@ -47,6 +47,25 @@ class SpatialConnectomeTests(unittest.TestCase):
             self.model.mean_edge_distance(), self.model.mean_allowed_distance()
         )
 
+    def test_random_topology_removes_distance_bias(self):
+        random_model = SpatialConnectome(
+            ConnectomeConfig(
+                n_input=24,
+                n_substrate=48,
+                n_output=24,
+                out_degree=12,
+                topology="random",
+                seed=7,
+            )
+        )
+        distance_gap = abs(
+            random_model.mean_edge_distance() - random_model.mean_allowed_distance()
+        )
+        biased_gap = abs(
+            self.model.mean_edge_distance() - self.model.mean_allowed_distance()
+        )
+        self.assertLess(distance_gap, biased_gap)
+
     def test_dale_sign_is_fixed_per_source(self):
         weight = self.model.effective_weights
         for unit in range(self.model.config.n_units):
