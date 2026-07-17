@@ -616,6 +616,8 @@ class ConnectomeSyllableDialogue:
                 structural_rewire_mode="local_stochastic",
                 synaptic_stability_strength=100.0,
                 target_local_output_plasticity=True,
+                concept_rewire_stability_threshold=0.02,
+                dendritic_output_enabled=True,
                 seed=seed,
             )
         )
@@ -829,7 +831,7 @@ class ConnectomeSyllableDialogue:
 
     def consolidate_and_clear(self, *, cycles: int = 100) -> None:
         self.connectome.consolidate(cycles=cycles)
-        self.connectome.warm.zero_()
+        self.connectome.clear_fast_synapses()
         self.connectome.state.zero_()
 
     @staticmethod
