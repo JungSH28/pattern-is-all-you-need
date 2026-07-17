@@ -54,6 +54,7 @@ class ConnectomeConfig:
     synaptic_stability_strength: float = 0.0
     target_local_output_plasticity: bool = False
     output_commitment_threshold: float = 0.0
+    output_synaptic_scaling: bool = False
     recurrent_learning_scale: float = 0.10
     concept_rewire_per_input: int = 4
     output_rewire_per_source: int = 1
@@ -405,7 +406,24 @@ class SpatialConnectome:
         teacher: torch.Tensor | None = None,
     ) -> torch.Tensor:
         drive = torch.zeros_like(state)
-        drive.scatter_add_(0, self.dst, state[self.src] * self.effective_weights)
+        weights = self.effective_weights
+        if self.config.output_synaptic_scaling:
+            output_edge = self.region[self.dst] == OUTPUT
+            incoming = torch.zeros(self.config.n_units)
+            incoming.scatter_add_(
+                0, self.dst[output_edge], weights[output_edge].abs()
+            )
+            count = torch.zeros(self.config.n_units)
+            count.scatter_add_(
+                0,
+                self.dst[output_edge],
+                torch.ones(int(output_edge.sum().item())),
+            )
+            target_total = count * self.config.initial_weight
+            gain = target_total / incoming.clamp_min(1e-8)
+            weights = weights.clone()
+            weights[output_edge] *= gain[self.dst[output_edge]]
+        drive.scatter_add_(0, self.dst, state[self.src] * weights)
         activity = F.relu((1.0 - self.config.leak) * state + drive - self.config.threshold)
         activity = self._cap_region_activity(activity)
         if sensory is not None:
