@@ -56,6 +56,7 @@ class ConnectomeConfig:
     output_commitment_threshold: float = 0.0
     output_synaptic_scaling: bool = False
     output_feedback_learning_scale: float = 0.0
+    concept_rewire_stability_threshold: float = 0.0
     recurrent_learning_scale: float = 0.10
     concept_rewire_per_input: int = 4
     output_rewire_per_source: int = 1
@@ -929,7 +930,15 @@ class SpatialConnectome:
             existing = self.dst[source_edges]
             available_mask = ~torch.isin(active_targets, existing)
             candidates = active_targets[available_mask]
-            number = min(count, len(candidates), len(source_edges))
+            replaceable = torch.ones(len(source_edges), dtype=torch.bool)
+            threshold = self.config.concept_rewire_stability_threshold
+            if threshold > 0.0:
+                replaceable = self.stability[source_edges] < threshold
+            number = min(
+                count,
+                len(candidates),
+                int(replaceable.sum().item()),
+            )
             if number == 0:
                 continue
 
@@ -951,10 +960,14 @@ class SpatialConnectome:
             new_destinations = candidates[selected]
 
             if self.config.structural_rewire_mode == "weakest":
-                replacement = torch.topk(
+                replacement_score = (
                     target[existing]
                     + self.config.synaptic_stability_strength
-                    * self.stability[source_edges],
+                    * self.stability[source_edges]
+                )
+                replacement_score[~replaceable] = float("inf")
+                replacement = torch.topk(
+                    replacement_score,
                     number,
                     largest=False,
                 ).indices
@@ -965,6 +978,7 @@ class SpatialConnectome:
                     * self.stability[source_edges]
                     + 0.05
                 )
+                prune_probability[~replaceable] = 0.0
                 replacement = torch.multinomial(
                     prune_probability,
                     number,
