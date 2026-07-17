@@ -52,6 +52,7 @@ class ConnectomeConfig:
     warm_decay: float = 0.90
     synaptic_stability_rate: float = 1.0
     synaptic_stability_strength: float = 0.0
+    target_local_output_plasticity: bool = False
     recurrent_learning_scale: float = 0.10
     concept_rewire_per_input: int = 4
     output_rewire_per_source: int = 1
@@ -177,6 +178,21 @@ class SpatialConnectome:
         """Per-edge learning availability from that edge's own history."""
         strength = self.config.synaptic_stability_strength
         return 1.0 / (1.0 + strength * self.stability)
+
+    def _output_error(
+        self,
+        target_pattern: torch.Tensor,
+        readout: torch.Tensor,
+        output_edge: torch.Tensor,
+    ) -> torch.Tensor:
+        """Postsynaptic teaching signal available at each R->O contact."""
+        target = target_pattern[self.dst[output_edge]]
+        error = target - readout[self.dst[output_edge]]
+        if self.config.target_local_output_plasticity:
+            # A clamped target neuron can modify its own incoming contacts;
+            # silent non-target neurons receive no exact negative-label signal.
+            error = error * (target > 0)
+        return error
 
     def outgoing_vector(self, unit: int) -> torch.Tensor:
         """Materialize W[unit, :] for inspection; computation stays sparse."""
@@ -505,9 +521,7 @@ class SpatialConnectome:
         output_edge = (self.region[self.src] == SUBSTRATE) & (
             self.region[self.dst] == OUTPUT
         )
-        output_error = target_pattern[self.dst[output_edge]] - readout[
-            self.dst[output_edge]
-        ]
+        output_error = self._output_error(target_pattern, readout, output_edge)
         delta = (
             self.signs[output_edge]
             * free[self.src[output_edge]]
@@ -537,9 +551,7 @@ class SpatialConnectome:
         output_edge = (self.region[self.src] == SUBSTRATE) & (
             self.region[self.dst] == OUTPUT
         )
-        output_error = target_pattern[self.dst[output_edge]] - readout[
-            self.dst[output_edge]
-        ]
+        output_error = self._output_error(target_pattern, readout, output_edge)
         delta = (
             self.signs[output_edge]
             * free[self.src[output_edge]]
@@ -567,9 +579,7 @@ class SpatialConnectome:
         output_edge = (self.region[self.src] == SUBSTRATE) & (
             self.region[self.dst] == OUTPUT
         )
-        output_error = target_pattern[self.dst[output_edge]] - readout[
-            self.dst[output_edge]
-        ]
+        output_error = self._output_error(target_pattern, readout, output_edge)
         delta = (
             self.signs[output_edge]
             * bound_state[self.src[output_edge]]
