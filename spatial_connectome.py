@@ -83,6 +83,10 @@ class OutputDendriticBranch:
     warm: float = 1.0
 
 
+def _product(pair: tuple[float, float]) -> float:
+    return pair[0] * pair[1]
+
+
 class SpatialConnectome:
     """A single sparse I/R/O connectome with local state and plastic weights."""
 
@@ -281,10 +285,17 @@ class SpatialConnectome:
         ).clamp(min=-1.5, max=1.5)
         self.stability_tag[edge & (presynaptic_state[self.dst] > 0)] = 1.0
 
-    def _normalized_branch_activity(self, state: torch.Tensor) -> torch.Tensor:
+    def _normalized_branch_activity(
+        self, state: torch.Tensor, *, with_output_context: bool = False
+    ) -> torch.Tensor:
         activity = torch.zeros_like(state)
-        substrate = self.region == SUBSTRATE
-        activity[substrate] = state[substrate]
+        sources = self.region == SUBSTRATE
+        if with_output_context:
+            # Recently emitted O assemblies are ordinary presynaptic partners
+            # for an O neuron's branches, giving serial order without an
+            # external decoder.
+            sources = sources | (self.region == OUTPUT)
+        activity[sources] = state[sources]
         return activity / activity.square().sum().sqrt().clamp_min(1e-8)
 
     @staticmethod
@@ -297,10 +308,16 @@ class SpatialConnectome:
         return float(torch.dot(normalized[branch.sources], branch.weights))
 
     def learn_dendritic_output(
-        self, bound_state: torch.Tensor, target_pattern: torch.Tensor
+        self,
+        bound_state: torch.Tensor,
+        target_pattern: torch.Tensor,
+        *,
+        with_output_context: bool = False,
     ) -> float:
         """Recruit O-local branches from target clamp and coincident R activity."""
-        normalized = self._normalized_branch_activity(bound_state)
+        normalized = self._normalized_branch_activity(
+            bound_state, with_output_context=with_output_context
+        )
         sources = torch.where(normalized > 0)[0]
         if len(sources) == 0:
             return 0.0
@@ -337,9 +354,13 @@ class SpatialConnectome:
                 recruited += 1
         return recruited / max(1, len(target_units))
 
-    def dendritic_output_state(self, bound_state: torch.Tensor) -> torch.Tensor:
+    def dendritic_output_state(
+        self, bound_state: torch.Tensor, *, with_output_context: bool = False
+    ) -> torch.Tensor:
         """Let each O neuron emit its strongest local branch coincidence."""
-        normalized = self._normalized_branch_activity(bound_state)
+        normalized = self._normalized_branch_activity(
+            bound_state, with_output_context=with_output_context
+        )
         state = bound_state.clone()
         state[self.region == OUTPUT] = 0.0
         for destination, branches in self.output_dendritic_branches.items():
@@ -352,6 +373,119 @@ class SpatialConnectome:
                 default=0.0,
             )
         return state
+
+    def _region_unit(self, state: torch.Tensor, region: int) -> torch.Tensor:
+        activity = torch.zeros_like(state)
+        selected = self.region == region
+        activity[selected] = state[selected]
+        norm = activity.square().sum().sqrt()
+        return activity / norm if norm > 1e-8 else activity
+
+    def _sequence_branch_response(
+        self, state: torch.Tensor, branch: OutputDendriticBranch
+    ) -> tuple[float, float]:
+        """Coincidence of two separately normalized streams.
+
+        A branch's R sources carry what is meant and its O sources carry what
+        was just said.  Concatenating them into one normalized vector makes the
+        two compete for the same budget: raising the emitted trace enough to end
+        a sentence starves the query gate that selects the content.  Requiring
+        both matches instead keeps the streams independent, and a branch
+        recruited with an empty trace stops firing once the trace fills, which
+        ends the sentence without a terminal symbol.
+        """
+        regions = self.region[branch.sources]
+        matches = []
+        for region in (SUBSTRATE, OUTPUT):
+            selected = regions == region
+            weights = branch.weights[selected]
+            present = float(state[self.region == region].abs().sum()) > 1e-8
+            if not len(weights):
+                # This branch expects silence in the region; any activity there
+                # means the context is not the one it was recruited for.
+                matches.append(0.0 if present else 1.0)
+                continue
+            if not present:
+                matches.append(0.0)
+                continue
+            norm = weights.square().sum().sqrt().clamp_min(1e-8)
+            normalized = self._region_unit(state, region)
+            matches.append(
+                float(torch.dot(normalized[branch.sources[selected]], weights / norm))
+            )
+        return matches[0], matches[1]
+
+    def dendritic_sequence_emission(
+        self, bound_state: torch.Tensor
+    ) -> dict[str, tuple[float, float]]:
+        """Per registered token, its best branch ``(score, match)``.
+
+        ``score`` weights the full coincidence by the branch's consolidated
+        strength and decides which token wins.  The reported match is the order
+        stream alone.  A held-out entity weakens the meaning stream while its
+        order stream stays intact, whereas a finished sentence leaves no branch
+        expecting the present trace, so thresholding the order stream separates
+        "say the next syllable" from "stop" where the product cannot.
+        """
+        emission: dict[str, tuple[float, float]] = {}
+        for token, units in self.output_assemblies.items():
+            score = 0.0
+            match_total = 0.0
+            for unit in units.tolist():
+                best_score = 0.0
+                best_match = 0.0
+                for branch in self.output_dendritic_branches.get(unit, ()):
+                    meaning, order = self._sequence_branch_response(
+                        bound_state, branch
+                    )
+                    unit_score = meaning * order * self._branch_strength(branch)
+                    if unit_score > best_score:
+                        best_score, best_match = unit_score, order
+                # The whole assembly competes: evidence sums over its units,
+                # exactly as the single-token readout does.
+                score += best_score
+                match_total += best_match
+            emission[str(token)] = (score, match_total / max(1, len(units)))
+        return emission
+
+    def learn_dendritic_sequence(
+        self, bound_state: torch.Tensor, target_pattern: torch.Tensor
+    ) -> int:
+        """Recruit a two-stream branch where the target is not already produced."""
+        normalized = self._normalized_branch_activity(
+            bound_state, with_output_context=True
+        )
+        sources = torch.where(normalized != 0)[0]
+        if len(sources) == 0:
+            return 0
+        recruited = 0
+        targets = torch.where((self.region == OUTPUT) & (target_pattern > 0))[0]
+        for destination in targets.tolist():
+            branches = self.output_dendritic_branches.setdefault(destination, [])
+            responses = [
+                _product(self._sequence_branch_response(bound_state, branch))
+                for branch in branches
+            ]
+            if responses and max(responses) >= (
+                self.config.dendritic_branch_novelty_threshold
+            ):
+                continue
+            new_branch = OutputDendriticBranch(
+                sources=sources.clone(),
+                weights=normalized[sources].clone(),
+                warm=self.config.dendritic_branch_initial_warm,
+            )
+            if len(branches) < self.config.max_dendritic_branches_per_output:
+                branches.append(new_branch)
+                recruited += 1
+                continue
+            immature = [
+                index for index, branch in enumerate(branches) if branch.cold < 0.05
+            ]
+            if immature:
+                branches[min(immature, key=responses.__getitem__)] = new_branch
+                recruited += 1
+        return recruited
 
     def dendritic_branch_count(self) -> int:
         return sum(map(len, self.output_dendritic_branches.values()))

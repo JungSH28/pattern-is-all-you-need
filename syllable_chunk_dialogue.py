@@ -165,6 +165,7 @@ class BioLocalTemporalChunker:
         self.bank = SparseAssemblyBank(n_units, assembly_size, seed)
         self.chunk_bank = SparseAssemblyBank(n_units, assembly_size, seed + 1)
         self.transition = torch.zeros(n_units, n_units)
+        self.constituent = torch.zeros(n_units, n_units)
         self.counts: Counter[tuple[str, ...]] = Counter()
         self.learned_patterns: dict[tuple[str, ...], float] = {}
         self.pattern_assemblies: dict[tuple[str, ...], torch.Tensor] = {}
@@ -220,6 +221,29 @@ class BioLocalTemporalChunker:
             # recruitment then gives the stabilized chunk its own assembly;
             # balanced recruitment is explicitly retained in the audit.
             self.pattern_assemblies[pattern] = self.chunk_bank.code(pattern)
+        self._learn_constituents()
+
+    def _learn_constituents(self, *, passes: int = 80) -> None:
+        """Connect each chunk assembly to the syllables it is made of.
+
+        A chunk assembly is recruited while its constituent syllable assemblies
+        fire, so the connection is ordinary coactivity.  Plain Hebbian counting
+        makes frequent syllables win on the units a chunk shares with other
+        chunks, so the same LTP+LTD delta used for concept learning supplies the
+        negative term.  Without this link the chunk is an opaque code and
+        nothing can pronounce the object it names.
+        """
+        for _ in range(passes):
+            for pattern, chunk_code in self.pattern_assemblies.items():
+                target = torch.zeros(self.n_units)
+                for syllable in pattern:
+                    target = torch.maximum(target, self.bank.code(syllable))
+                normalized = chunk_code / chunk_code.square().sum().sqrt().clamp_min(1e-8)
+                error = target - normalized @ self.constituent
+                self.constituent.add_(
+                    self.learning_rate * torch.outer(normalized, error)
+                )
+        self.constituent.clamp_(-2.0, 2.0)
 
     def feature(self, text: str, *, temporal: bool = True) -> torch.Tensor:
         sequence = syllable_sequence(text)
@@ -606,13 +630,13 @@ class ConnectomeSyllableDialogue:
     object identity; neither its character span nor a word label is supplied.
     """
 
-    def __init__(self, *, seed: int = 0):
+    def __init__(self, *, seed: int = 0, output_units: int = 64):
         self.chunker = BioLocalTemporalChunker(seed=seed)
         self.connectome = SpatialConnectome(
             ConnectomeConfig(
                 n_input=self.chunker.n_units,
                 n_substrate=512,
-                n_output=64,
+                n_output=output_units,
                 out_degree=192,
                 topology="random",
                 steps_per_token=2,
