@@ -193,28 +193,33 @@ argmax다. 데이터 supervision 자체는 허용된 경계조건이지만, targ
   한 supervised episode로 제공하면 세 문장에 반복된 chunk가 개체 assembly가 되어 기존 단일
   `SpatialConnectome` I→R concept learning에 직접 들어간다. query chunk는 intent label 없이 novelty
   competition으로 6개 control prototype을 형성하고 12.5% R dendritic subcircuit를 연다. 이후 기존 local
-  I→R concept rule, R→O teacher-clamped rule, warm→cold 공고화와 full O-vocabulary readout을 사용한다.
+  I→R concept rule과 full O-vocabulary readout을 사용한다. 출력 기억은 단일 선형 R→O 합 대신 O 뉴런별
+  dendritic coincidence branch를 쓴다. target O clamp와 현재 R activity가 기존 branch에 충분히 맞지 않을
+  때만 새 warm branch를 모집하고, warm→cold 뒤 mature branch는 덮지 않는다.
 
-| track | goal 성공 seed | held-out QA | control 제거 | temporal 학습 제거 | 음절 역순 | warm 제거 | entity chunk |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| functional/global | **10/10** | **80/80** | 34/80 | 19/80 | 20/80 | — | **100/100** |
-| bio/single-connectome | **6/10** | **76/80** | 40/80 | **0/80** | **0/80** | 6/80 | **100/100** |
+| track | 전 단계 완벽 seed | 첫 QA | 후속 기존 보존 | 신규 QA | control 제거 | temporal 제거 | warm 제거 | linear R→O control | branch |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| functional/global | **6/10** | **80/80** | **77/80** | **34/40** | 34/80 | 19/80 | — | — | — |
+| bio/single-connectome | **6/10** | **78/80** | **72/80** | **36/40** | 40/80 | **0/80** | 20/80 | 56/80 + 34/40 | 214 |
 
-기능 트랙의 summary `success=6/10`은 명시 goal 밖 후속 보존·새 범주까지 모두 맞힌 더 강한 조건이며,
-현재 goal의 base 조건은 10/10이다. 정답 target을 받지 않은 wolf/fox/truck/bike가 처음 보는 조사 조합과
-질문 문장에서 bio 95%를 기록했다. bio
-control 제거는 두 질문을 합쳐 50%, temporal update 제거는 recurrent fact chunk 자체를 만들지 못해 0%,
-역순은 learned entity chunk를 재활성하지 못해 0%, 공고화 전 warm 제거는 7.5%였다. 따라서 결과는 외부
-word tokenizer나 숨은 query ID lookup으로 설명되지 않는다. 기능 트랙은 후속 fruit/tool 실험도 보존
-77/80·새 34/40이지만, single-connectome bio의 continual stage는 이번 명시 goal에 포함하지 않았고
-검증값을 `-1`로 출력한다. 별도 dense local prototype의 후속학습 성공을 single-connectome 성공으로
-합산하지 않는다.
+새 안정성–가소성 goal은 replay 없이 통과했다. base animal/vehicle를 cold로 공고화한 뒤 old record나 old
+answer target을 다시 주지 않고 fruit/tool 사실·답만 학습했다. bio는 기존 보존과 신규 학습이 각각 90%,
+두 세션의 모든 held-out 답을 맞힌 seed가 6/10이었다. 같은 local value rule과 데이터에서 dendritic
+branch를 끄고 단일 선형 R→O compartment만 쓰면 기존 70%, 신규 85%였다. branch 분리는 총 정확도를
+18/120 높였고 특히 기존 보존을 20%p 높였다.
+
+기전은 세 부분이다. target clamp와 활성 pre가 같은 접점만 stability tag를 얻어 비정답 LTD의 부재까지
+장기 보호하지 않는다. 공고화 threshold를 넘은 I→R concept edge는 같은 source의 이후 pruning 후보에서
+제외한다. O 뉴런은 자기 기존 branch와 현재 R pattern의 coincidence만 비교해 novel branch를 모집하며,
+capacity가 찼을 때 cold mature branch는 교체하지 않는다. branch는 O 뉴런별 warm/cold 상태로
+`SpatialConnectome` 안에 저장되고 전체 O-token assembly가 그대로 경쟁한다.
 
 **새 locality audit:** bio 본선은 boundary-free syllable input, local temporal edge update, local query
 prototype update, single-connectome I/R/O semantic/output memory, local concept/output synaptic update,
+target-specific synaptic tag, O-local dendritic branch recruitment, mature-branch preservation,
 no autograd/weight transport를 충족한다. 남은 전역 scaffold는 finite-window enumeration, fact episode의
 공통 chunk 교집합, novelty winner와 sparse activity competition, chunk/control seed 균형 모집,
-supervised property·O target clamp, full-vocabulary argmax다. 특히 supervised episode grouping은 실제
+R-state somatic gain normalization, supervised property·O target clamp, full-vocabulary argmax다. 특히 supervised episode grouping은 실제
 환경에서 같은 대상을 여러 발화와 함께 보는 상황의 대용물이며 생물 국소 성공으로 세지 않는다.
 
 ```bash
