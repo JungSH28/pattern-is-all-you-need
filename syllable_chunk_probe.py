@@ -302,11 +302,16 @@ class SyllableDialogueResult:
     later_chunks: int
     base_margin: float
     retained_margin: float
+    branch_count: int
 
     @property
     def success(self) -> bool:
         if self.track == "bio_connectome_local":
-            return self.base_correct == 2 * len(HELD_OUT)
+            return (
+                self.base_correct == 2 * len(HELD_OUT)
+                and self.retained_correct == 2 * len(HELD_OUT)
+                and self.later_correct == 2 * len(LATER_HELD_OUT)
+            )
         return (
             self.base_correct == 2 * len(HELD_OUT)
             and self.retained_correct == 2 * len(HELD_OUT)
@@ -352,6 +357,7 @@ def functional_result(seed: int) -> SyllableDialogueResult:
         later_chunks=later_chunks,
         base_margin=base_margin,
         retained_margin=retained_margin,
+        branch_count=-1,
     )
 
 
@@ -410,13 +416,32 @@ def bio_result(
     base_chunks = chunk_recall(model, tuple(CONCEPTS))
 
     lesion = copy.deepcopy(model)
-    lesion.connectome.warm.zero_()
+    lesion.connectome.clear_fast_synapses()
     lesion.connectome.state.zero_()
     warm_lesion, _ = score_connectome(lesion, base_examples)
     del lesion
 
     model.consolidate_and_clear()
     base_correct, base_margin = score_connectome(model, base_examples)
+
+    model.observe_streams(stage_streams(LATER_CONCEPTS, LATER_LABELED))
+    model.finalize_chunks()
+    for episode in fact_episodes(LATER_CONCEPTS):
+        model.observe_fact_episode(episode, rounds=concept_rounds)
+    later_questions = training_questions(LATER_LABELED)
+    for iteration in range(answer_rounds):
+        for text, target in later_questions:
+            model.teach_answer(
+                text,
+                target,
+                structural_plasticity=iteration == 0,
+            )
+    model.consolidate_and_clear()
+    retained_correct, retained_margin = score_connectome(model, base_examples)
+    later_correct, _ = score_connectome(
+        model, heldout_questions(LATER_HELD_OUT)
+    )
+    later_chunks = chunk_recall(model, tuple(LATER_CONCEPTS))
     return SyllableDialogueResult(
         track="bio_connectome_local",
         seed=seed,
@@ -425,12 +450,13 @@ def bio_result(
         temporal_ablation_correct=temporal_ablation,
         reversed_correct=reversed_correct,
         warm_lesion_correct=warm_lesion,
-        retained_correct=-1,
-        later_correct=-1,
+        retained_correct=retained_correct,
+        later_correct=later_correct,
         base_chunks=base_chunks,
-        later_chunks=-1,
+        later_chunks=later_chunks,
         base_margin=base_margin,
-        retained_margin=-1.0,
+        retained_margin=retained_margin,
+        branch_count=model.connectome.dendritic_branch_count(),
     )
 
 
@@ -466,7 +492,8 @@ def run_probe(seeds: int = 10, *, verbose: bool = True) -> list[SyllableDialogue
             f"chunks={mean(r.base_chunks for r in group):.1f}/10+"
             f"{mean(r.later_chunks for r in group):.1f}/8 "
             f"margin={mean(r.base_margin for r in group):+.3f}/"
-            f"{mean(r.retained_margin for r in group):+.3f}"
+            f"{mean(r.retained_margin for r in group):+.3f} "
+            f"branches={mean(r.branch_count for r in group):.1f}"
         )
     return results
 
@@ -489,19 +516,15 @@ def verify_goal(
         required_success = math.ceil(minimum_success_rate * len(group))
         if base / base_total < minimum_accuracy:
             raise AssertionError(f"{track}: base {base}/{base_total}")
-        if track == "functional_global":
-            if retained / base_total < minimum_accuracy:
-                raise AssertionError(f"{track}: retained {retained}/{base_total}")
-            if later / later_total < minimum_accuracy:
-                raise AssertionError(f"{track}: later {later}/{later_total}")
+        if retained / base_total < minimum_accuracy:
+            raise AssertionError(f"{track}: retained {retained}/{base_total}")
+        if later / later_total < minimum_accuracy:
+            raise AssertionError(f"{track}: later {later}/{later_total}")
         if sum(result.success for result in group) < required_success:
             raise AssertionError(f"{track}: insufficient perfect seeds")
         if mean(result.base_margin for result in group) <= 0.02:
             raise AssertionError(f"{track}: weak base margin")
-        if (
-            track == "functional_global"
-            and mean(result.retained_margin for result in group) <= 0.02
-        ):
+        if mean(result.retained_margin for result in group) <= 0.02:
             raise AssertionError(f"{track}: weak retained margin")
 
         control_off = sum(result.control_ablation_correct for result in group)
@@ -527,6 +550,10 @@ def verify_goal(
             if base - lesion < 0.15 * base_total:
                 raise AssertionError(
                     "bio_connectome_local: consolidation contribution"
+                )
+            if mean(result.branch_count for result in group) <= 0:
+                raise AssertionError(
+                    "bio_connectome_local: no dendritic output branches"
                 )
 
     audit = ConnectomeSyllableDialogue.locality_audit().as_dict()
