@@ -118,6 +118,7 @@ def _train(
     concept_rounds: int = 30,
     pair_rounds: int = 6,
     concepts: Mapping[str, Sequence[str]] = CONCEPTS,
+    omit: str | None = None,
 ) -> ConnectomeCompositionDialogue:
     model = ConnectomeCompositionDialogue(seed=seed)
     model.register_syllable_vocabulary(composition_vocabulary_texts())
@@ -125,7 +126,11 @@ def _train(
     model.observe_streams(stage_streams(concepts, LABELED))
     model.observe_streams(tuple(item.question for item in training_pairs()))
     model.finalize_chunks()
-    for episode in fact_episodes(concepts):
+    for entity, episode in zip(concepts, fact_episodes(concepts)):
+        # Removing one composition target: this entity's facts are never
+        # learned, so no assembly exists to co-activate.
+        if entity == omit:
+            continue
         model.observe_fact_episode(episode, rounds=concept_rounds)
     same = [item for item in training_pairs() if item.shared is not None]
     cross = [item for item in training_pairs() if item.shared is None]
@@ -176,7 +181,14 @@ def result(seed: int) -> dict[str, object]:
             if item.shared is None
         ),
         "cross_total": len(cross),
-
+        # Single-fact baseline: each entity's own property, retrieved the #32
+        # way. If these pass, the facts a composition would draw on are stored
+        # and reachable, so a pair failure is composition and not memory.
+        "single_fact_retrieval": sum(
+            answer in model.generate(question)
+            for question, answer in single_fact_questions()
+        ),
+        "single_fact_total": len(single_fact_questions()),
         "samples": tuple(
             (item.question, text or "(empty)", item.sentence)
             for item, text in zip(examples[:3], generated[:3])
@@ -184,9 +196,24 @@ def result(seed: int) -> dict[str, object]:
     }
 
 
+def partner_removed(seed: int) -> tuple[str, str]:
+    """Ablate one composition target on a working (animal-containing) pair.
+
+    Normal: wolf and truck are different categories, so composition answers
+    that there is nothing in common. With truck's facts never learned, only
+    wolf's assembly can co-activate, and a retrieval fallback claims wolf's own
+    property -- the pair answer collapses to a single-fact answer.
+    """
+    question = PAIR_HELDOUT.format(a=SURFACE["wolf"], b=SURFACE["truck"])
+    normal = _train(seed).generate(question)
+    removed = _train(seed, omit="truck").generate(question)
+    return normal, removed
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--seeds", type=int, default=5)
+    parser.add_argument("--partner-seeds", type=int, default=3)
     arguments = parser.parse_args()
     results = [result(seed) for seed in range(arguments.seeds)]
     print(f"\n=== composition, bio single connectome ({arguments.seeds} seeds) ===")
@@ -195,6 +222,7 @@ def main() -> None:
         ("same_category", "same_total"),
         ("cross_category", "cross_total"),
         ("retrieval_answer_on_cross_pairs", "retrieval_total"),
+        ("single_fact_retrieval", "single_fact_total"),
     ):
         got = sum(int(item[key]) for item in results)
         out = sum(int(item[total]) for item in results)
@@ -202,6 +230,17 @@ def main() -> None:
     print("  samples (question -> generated | target):")
     for question, generated, target in results[0]["samples"]:
         print(f"    {question} -> {generated} | {target}")
+
+    print("\n  ablation -- remove one composition target (wolf+truck, cross):")
+    collapsed = 0
+    for seed in range(arguments.partner_seeds):
+        normal, removed = partner_removed(seed)
+        # A cross pair collapses when dropping the partner makes the model claim
+        # a shared property instead of answering "none".
+        if "없어" in normal and "없어" not in removed:
+            collapsed += 1
+        print(f"    seed{seed}: both facts -> {normal} | partner removed -> {removed}")
+    print(f"    collapsed to single-fact answer: {collapsed}/{arguments.partner_seeds}")
 
 
 if __name__ == "__main__":

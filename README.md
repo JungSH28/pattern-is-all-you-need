@@ -365,7 +365,39 @@ the assemblies did not become less distinct — the category gap widened — but
 locality was bought and a sparsity guarantee was sold, not exchanged. The band and control rates are
 fitted at this scale and were not tested for transfer.
 
+**Answering from two facts, and where it breaks** (`composition_probe.py`). Every goal above answers by
+retrieval: evoke one entity, gate by the query, read back the stored answer. Asking what two entities
+have in common has no stored answer for any pair — a same-category pair shares a property, a
+cross-category pair shares nothing. Co-activating both concept chunks is meant to let the R units both of
+them drive stand out, so the shared property is what survives; nothing intersects the two fact sets, the
+substrate is asked to.
+
+It composes, and only for animals. Held-out animal pairs answer 3/3 — wolf and fox were never given a
+category and never appeared in a training pair. Two controls establish that this is composition and not
+retrieval. Removing one target: wolf+truck normally answers "nothing in common", but with truck's facts
+never learned all three seeds collapse to "both have fur", so the answer depends on the partner's
+assembly existing. And the retrieval-only answer — the first entity's own property — appears on just
+2/20 cross pairs, so neither entity alone drives the result.
+
+Vehicles fail 0/3, including the vehicle pairs taught directly (0/6). The cause is measured. Single
+entities carry a clear property signature (animals +0.19, vehicles +0.14), but pairing halves the
+vehicle gap to +0.070 against +0.059 for a cross pair, so the two states are not separable. Under the
+fixed top-k the previous goal removed, the taught vehicle pairs succeed (6/6): the mechanism needs the
+per-input sparsity homeostatic firing gave up, because top-k acts as a contrast enhancer and a region at
+density 0.91 buries the doubly-driven units in a shared background. The single-fact retrieval baseline
+tells the same story from the other side — 10/20, passing for animals and failing for vehicles, so the
+vehicle failure is upstream of composition.
+
+This re-reads the previous goal's cost. The sparsity guarantee it sold was not cosmetic; it was a
+capability. Lowering the homeostatic ceiling to 0.03 does not recover it (density 0.913 → 0.802): the
+intrinsic stability that protects older concepts locks the thresholds before homeostasis reaches its
+set-point. Stability-plasticity has reappeared in intrinsic excitability, unsolved — the proportional
+lock trades one side for the other. The way forward is a local contrast mechanism (lateral inhibition or
+divisive normalization over a local pool) doing what top-k did, without a global rank; that is the
+long-deferred "revive the dynamics" axis.
+
 ```bash
+python3 composition_probe.py --seeds 5 --partner-seeds 3
 python3 -m unittest -v test_spatial_connectome.py test_homeostatic_firing.py
 python3 spatial_connectome.py
 python3 context_branch_probe.py --seeds 20 --rounds 180 --verify
