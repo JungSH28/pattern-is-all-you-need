@@ -604,6 +604,16 @@ def verify_goal(
                 raise AssertionError(
                     "bio_connectome_local: no dendritic output branches"
                 )
+            linear_total = sum(
+                result.linear_retained_correct + result.linear_later_correct
+                for result in group
+            )
+            dendritic_total = retained + later
+            continual_total = base_total + later_total
+            if dendritic_total - linear_total < 0.10 * continual_total:
+                raise AssertionError(
+                    "bio_connectome_local: dendritic separation contribution"
+                )
 
     audit = ConnectomeSyllableDialogue.locality_audit().as_dict()
     required_local = {
