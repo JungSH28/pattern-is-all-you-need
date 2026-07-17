@@ -615,6 +615,7 @@ class ConnectomeSyllableDialogue:
                 initial_weight=0.08,
                 structural_rewire_mode="local_stochastic",
                 synaptic_stability_strength=100.0,
+                target_local_output_plasticity=True,
                 seed=seed,
             )
         )
