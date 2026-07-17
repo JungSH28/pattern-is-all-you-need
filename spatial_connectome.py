@@ -582,22 +582,6 @@ class SpatialConnectome:
             self.warm[output_edge] + learning_rate * delta
         ).clamp(min=-1.5, max=1.5)
 
-        feedback_edge = (
-            (self.region[self.src] == OUTPUT)
-            & (self.region[self.dst] == SUBSTRATE)
-            & (target_pattern[self.src] > 0)
-        )
-        feedback_delta = (
-            target_pattern[self.src[feedback_edge]]
-            * bound_state[self.dst[feedback_edge]]
-            * self.local_plasticity[feedback_edge]
-        )
-        self.warm[feedback_edge] = (
-            self.warm[feedback_edge]
-            + learning_rate
-            * self.config.output_feedback_learning_scale
-            * feedback_delta
-        ).clamp(min=-1.5, max=1.5)
         return float(delta.abs().mean().item())
 
     def learn_query_association(
@@ -631,6 +615,22 @@ class SpatialConnectome:
         )
         self.warm[output_edge] = (
             self.warm[output_edge] + learning_rate * delta
+        ).clamp(min=-1.5, max=1.5)
+        feedback_edge = (
+            (self.region[self.src] == OUTPUT)
+            & (self.region[self.dst] == SUBSTRATE)
+            & (target_pattern[self.src] > 0)
+        )
+        feedback_delta = (
+            target_pattern[self.src[feedback_edge]]
+            * bound_state[self.dst[feedback_edge]]
+            * self.local_plasticity[feedback_edge]
+        )
+        self.warm[feedback_edge] = (
+            self.warm[feedback_edge]
+            + learning_rate
+            * self.config.output_feedback_learning_scale
+            * feedback_delta
         ).clamp(min=-1.5, max=1.5)
         return float(delta.abs().mean().item())
 
