@@ -306,6 +306,9 @@ class SyllableLocalityAudit:
     local_temporal_synaptic_update: bool
     local_semantic_coactivity_update: bool
     local_output_pre_post_update: bool
+    local_synaptic_tagging: bool
+    local_dendritic_branch_recruitment: bool
+    mature_branch_preservation: bool
     query_control_from_learned_temporal_activity: bool
     local_query_control_prototype_update: bool
     no_autograd_or_weight_transport: bool
@@ -580,6 +583,9 @@ class BioLocalSyllableDialogue(_SyllableDialogueBase):
             local_temporal_synaptic_update=True,
             local_semantic_coactivity_update=True,
             local_output_pre_post_update=True,
+            local_synaptic_tagging=False,
+            local_dendritic_branch_recruitment=False,
+            mature_branch_preservation=False,
             query_control_from_learned_temporal_activity=True,
             local_query_control_prototype_update=False,
             no_autograd_or_weight_transport=True,
@@ -842,6 +848,9 @@ class ConnectomeSyllableDialogue:
             local_temporal_synaptic_update=True,
             local_semantic_coactivity_update=True,
             local_output_pre_post_update=True,
+            local_synaptic_tagging=True,
+            local_dendritic_branch_recruitment=True,
+            mature_branch_preservation=True,
             query_control_from_learned_temporal_activity=True,
             local_query_control_prototype_update=True,
             no_autograd_or_weight_transport=True,
