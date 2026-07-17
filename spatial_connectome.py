@@ -89,6 +89,7 @@ class SpatialConnectome:
         # Edge-local metaplastic state. Only actual warm->cold transfer raises
         # stability, so untouched developmental weights remain plastic.
         self.stability = torch.zeros_like(base)
+        self.stability_tag = torch.zeros_like(base)
         self.state = torch.zeros(config.n_units)
 
         self.input_assemblies: dict[str, torch.Tensor] = {}
@@ -197,6 +198,20 @@ class SpatialConnectome:
             error = error * (target > 0)
         return error
 
+    def _tag_target_output_edges(
+        self,
+        output_edge: torch.Tensor,
+        presynaptic_state: torch.Tensor,
+        target_pattern: torch.Tensor,
+    ) -> None:
+        """Set a local capture tag only where target clamp meets active pre."""
+        indices = torch.where(output_edge)[0]
+        tagged = (
+            (presynaptic_state[self.src[indices]] > 0)
+            & (target_pattern[self.dst[indices]] > 0)
+        )
+        self.stability_tag[indices[tagged]] = 1.0
+
     def _output_source_plasticity(
         self,
         target_pattern: torch.Tensor,
@@ -246,6 +261,7 @@ class SpatialConnectome:
         self.warm[edge] = (
             self.warm[edge] + learning_rate * scale * delta
         ).clamp(min=-1.5, max=1.5)
+        self.stability_tag[edge & (presynaptic_state[self.dst] > 0)] = 1.0
 
     def outgoing_vector(self, unit: int) -> torch.Tensor:
         """Materialize W[unit, :] for inspection; computation stays sparse."""
@@ -605,6 +621,7 @@ class SpatialConnectome:
         self.warm[output_edge] = (
             self.warm[output_edge] + learning_rate * delta
         ).clamp(min=-1.5, max=1.5)
+        self._tag_target_output_edges(output_edge, free, target_pattern)
 
         return float(delta.abs().mean().item())
 
@@ -640,6 +657,7 @@ class SpatialConnectome:
         self.warm[output_edge] = (
             self.warm[output_edge] + learning_rate * delta
         ).clamp(min=-1.5, max=1.5)
+        self._tag_target_output_edges(output_edge, free, target_pattern)
         self._learn_output_feedback(free, target_pattern, learning_rate)
         return float(delta.abs().mean().item())
 
@@ -673,6 +691,7 @@ class SpatialConnectome:
         self.warm[output_edge] = (
             self.warm[output_edge] + learning_rate * delta
         ).clamp(min=-1.5, max=1.5)
+        self._tag_target_output_edges(output_edge, bound_state, target_pattern)
         self._learn_output_feedback(bound_state, target_pattern, learning_rate)
         return float(delta.abs().mean().item())
 
@@ -753,6 +772,7 @@ class SpatialConnectome:
             self.cold[replacement] = 0.0
             self.warm[replacement] = self.config.initial_weight
             self.stability[replacement] = 0.0
+            self.stability_tag[replacement] = 0.0
 
     def learn_association(
         self,
@@ -800,6 +820,7 @@ class SpatialConnectome:
         self.warm.add_(
             learning_rate * delta * self.local_plasticity
         ).clamp_(min=-1.5, max=1.5)
+        self.stability_tag[delta != 0] = 1.0
         return float(delta.abs().mean().item())
 
     def learn_concept(
@@ -842,6 +863,7 @@ class SpatialConnectome:
                 target[self.dst[entity_edge]] - free[self.dst[entity_edge]]
             ) * self.local_plasticity[entity_edge]
             self.warm.add_(learning_rate * delta).clamp_(min=-1.5, max=1.5)
+            self.stability_tag[delta != 0] = 1.0
             if iteration % consolidate_every == 0:
                 self.consolidate()
 
@@ -876,6 +898,7 @@ class SpatialConnectome:
                 target[self.dst[edge]] - free[self.dst[edge]]
             ) * self.local_plasticity[edge]
             self.warm.add_(learning_rate * delta).clamp_(min=-1.5, max=1.5)
+            self.stability_tag[delta != 0] = 1.0
             if iteration % consolidate_every == 0:
                 self.consolidate()
 
@@ -958,6 +981,7 @@ class SpatialConnectome:
             self.cold[edge_indices] = self.config.initial_weight
             self.warm[edge_indices] = 0.0
             self.stability[edge_indices] = 0.0
+            self.stability_tag[edge_indices] = 0.0
 
     def consolidate(self, cycles: int = 1) -> None:
         """Transfer fast synaptic change into the slow variable on each edge."""
@@ -968,9 +992,12 @@ class SpatialConnectome:
             transfer = rate * self.warm
             self.cold.add_(transfer).clamp_(min=0.0, max=2.0)
             self.stability.add_(
-                self.config.synaptic_stability_rate * transfer.abs()
+                self.config.synaptic_stability_rate
+                * transfer.abs()
+                * self.stability_tag
             ).clamp_(max=2.0)
             self.warm.mul_(self.config.warm_decay)
+            self.stability_tag.mul_(self.config.warm_decay)
 
     def develop_positions(self, activity_samples: torch.Tensor, epochs: int = 1) -> None:
         """Early activity-dependent movement followed by topology resampling.
