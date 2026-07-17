@@ -223,6 +223,30 @@ class SpatialConnectome:
         source_allowed = ~committed | same_target
         return source_allowed[self.src[output_edge]].float()
 
+    def _learn_output_feedback(
+        self,
+        presynaptic_state: torch.Tensor,
+        target_pattern: torch.Tensor,
+        learning_rate: float,
+    ) -> None:
+        """Bind a clamped O assembly back to its active R state locally."""
+        scale = self.config.output_feedback_learning_scale
+        if scale <= 0.0:
+            return
+        edge = (
+            (self.region[self.src] == OUTPUT)
+            & (self.region[self.dst] == SUBSTRATE)
+            & (target_pattern[self.src] > 0)
+        )
+        delta = (
+            target_pattern[self.src[edge]]
+            * presynaptic_state[self.dst[edge]]
+            * self.local_plasticity[edge]
+        )
+        self.warm[edge] = (
+            self.warm[edge] + learning_rate * scale * delta
+        ).clamp(min=-1.5, max=1.5)
+
     def outgoing_vector(self, unit: int) -> torch.Tensor:
         """Materialize W[unit, :] for inspection; computation stays sparse."""
         row = torch.zeros(self.config.n_units)
@@ -616,22 +640,7 @@ class SpatialConnectome:
         self.warm[output_edge] = (
             self.warm[output_edge] + learning_rate * delta
         ).clamp(min=-1.5, max=1.5)
-        feedback_edge = (
-            (self.region[self.src] == OUTPUT)
-            & (self.region[self.dst] == SUBSTRATE)
-            & (target_pattern[self.src] > 0)
-        )
-        feedback_delta = (
-            target_pattern[self.src[feedback_edge]]
-            * bound_state[self.dst[feedback_edge]]
-            * self.local_plasticity[feedback_edge]
-        )
-        self.warm[feedback_edge] = (
-            self.warm[feedback_edge]
-            + learning_rate
-            * self.config.output_feedback_learning_scale
-            * feedback_delta
-        ).clamp(min=-1.5, max=1.5)
+        self._learn_output_feedback(free, target_pattern, learning_rate)
         return float(delta.abs().mean().item())
 
     def learn_bound_output(
@@ -664,6 +673,7 @@ class SpatialConnectome:
         self.warm[output_edge] = (
             self.warm[output_edge] + learning_rate * delta
         ).clamp(min=-1.5, max=1.5)
+        self._learn_output_feedback(bound_state, target_pattern, learning_rate)
         return float(delta.abs().mean().item())
 
     def _rewire_output_inputs(
