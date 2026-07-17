@@ -614,6 +614,7 @@ class ConnectomeSyllableDialogue:
                 max_output_density=0.10,
                 initial_weight=0.08,
                 structural_rewire_mode="local_stochastic",
+                synaptic_stability_strength=100.0,
                 seed=seed,
             )
         )
@@ -654,7 +655,7 @@ class ConnectomeSyllableDialogue:
         if not records:
             raise ValueError("fact episode must not be empty")
         winners = [
-            {pattern for pattern, _, _ in self.chunker.winning_codes(text)}
+            {pattern for pattern, _, _ in self.chunker.matched_codes(text)}
             for text, _ in records
         ]
         common = set.intersection(*winners)
