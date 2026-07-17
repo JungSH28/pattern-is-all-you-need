@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from statistics import mean
 from typing import Mapping, Sequence
@@ -303,6 +303,8 @@ class SyllableDialogueResult:
     base_margin: float
     retained_margin: float
     branch_count: int
+    linear_retained_correct: int
+    linear_later_correct: int
 
     @property
     def success(self) -> bool:
@@ -358,7 +360,45 @@ def functional_result(seed: int) -> SyllableDialogueResult:
         base_margin=base_margin,
         retained_margin=retained_margin,
         branch_count=-1,
+        linear_retained_correct=-1,
+        linear_later_correct=-1,
     )
+
+
+def linear_continual_control(
+    seed: int,
+    *,
+    concept_rounds: int,
+    answer_rounds: int,
+) -> tuple[int, int]:
+    """Run the same local learner with one linear R->O compartment."""
+    model = ConnectomeSyllableDialogue(seed=seed)
+    model.connectome.config = replace(
+        model.connectome.config,
+        dendritic_output_enabled=False,
+    )
+    model.register_syllable_vocabulary(fixed_syllable_vocabulary_texts())
+    model.register_output_vocabulary(output_vocabulary())
+    for concepts, labeled in (
+        (CONCEPTS, LABELED),
+        (LATER_CONCEPTS, LATER_LABELED),
+    ):
+        model.observe_streams(stage_streams(concepts, labeled))
+        model.finalize_chunks()
+        for episode in fact_episodes(concepts):
+            model.observe_fact_episode(episode, rounds=concept_rounds)
+        questions = training_questions(labeled)
+        for iteration in range(answer_rounds):
+            for text, target in questions:
+                model.teach_answer(
+                    text,
+                    target,
+                    structural_plasticity=iteration == 0,
+                )
+        model.consolidate_and_clear()
+    retained, _ = score_connectome(model, heldout_questions(HELD_OUT))
+    later, _ = score_connectome(model, heldout_questions(LATER_HELD_OUT))
+    return retained, later
 
 
 def bio_result(
@@ -442,6 +482,11 @@ def bio_result(
         model, heldout_questions(LATER_HELD_OUT)
     )
     later_chunks = chunk_recall(model, tuple(LATER_CONCEPTS))
+    linear_retained, linear_later = linear_continual_control(
+        seed,
+        concept_rounds=concept_rounds,
+        answer_rounds=answer_rounds,
+    )
     return SyllableDialogueResult(
         track="bio_connectome_local",
         seed=seed,
@@ -457,6 +502,8 @@ def bio_result(
         base_margin=base_margin,
         retained_margin=retained_margin,
         branch_count=model.connectome.dendritic_branch_count(),
+        linear_retained_correct=linear_retained,
+        linear_later_correct=linear_later,
     )
 
 
@@ -494,6 +541,8 @@ def run_probe(seeds: int = 10, *, verbose: bool = True) -> list[SyllableDialogue
             f"margin={mean(r.base_margin for r in group):+.3f}/"
             f"{mean(r.retained_margin for r in group):+.3f} "
             f"branches={mean(r.branch_count for r in group):.1f}"
+            f" linear={mean(r.linear_retained_correct for r in group):.2f}/8+"
+            f"{mean(r.linear_later_correct for r in group):.2f}/4"
         )
     return results
 
