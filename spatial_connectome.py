@@ -57,6 +57,10 @@ class ConnectomeConfig:
     output_synaptic_scaling: bool = False
     output_feedback_learning_scale: float = 0.0
     concept_rewire_stability_threshold: float = 0.0
+    dendritic_output_enabled: bool = False
+    dendritic_branch_novelty_threshold: float = 0.65
+    max_dendritic_branches_per_output: int = 16
+    dendritic_branch_initial_warm: float = 1.0
     recurrent_learning_scale: float = 0.10
     concept_rewire_per_input: int = 4
     output_rewire_per_source: int = 1
@@ -67,6 +71,16 @@ class ConnectomeConfig:
     @property
     def n_units(self) -> int:
         return self.n_input + self.n_substrate + self.n_output
+
+
+@dataclass
+class OutputDendriticBranch:
+    """One O-neuron-local coincidence compartment and its time scales."""
+
+    sources: torch.Tensor
+    weights: torch.Tensor
+    cold: float = 0.0
+    warm: float = 1.0
 
 
 class SpatialConnectome:
@@ -101,6 +115,9 @@ class SpatialConnectome:
         self.used_output_seed_sets: set[tuple[int, ...]] = set()
         self.query_gates: dict[str, torch.Tensor] = {}
         self.query_gate_usage = torch.zeros(config.n_substrate, dtype=torch.long)
+        self.output_dendritic_branches: dict[
+            int, list[OutputDendriticBranch]
+        ] = {}
 
     def _make_regions(self) -> torch.Tensor:
         c = self.config
@@ -264,17 +281,128 @@ class SpatialConnectome:
         ).clamp(min=-1.5, max=1.5)
         self.stability_tag[edge & (presynaptic_state[self.dst] > 0)] = 1.0
 
+    def _normalized_branch_activity(self, state: torch.Tensor) -> torch.Tensor:
+        activity = torch.zeros_like(state)
+        substrate = self.region == SUBSTRATE
+        activity[substrate] = state[substrate]
+        return activity / activity.square().sum().sqrt().clamp_min(1e-8)
+
+    @staticmethod
+    def _branch_strength(branch: OutputDendriticBranch) -> float:
+        return min(1.0, max(0.0, branch.cold + branch.warm))
+
+    def _branch_response(
+        self, normalized: torch.Tensor, branch: OutputDendriticBranch
+    ) -> float:
+        return float(torch.dot(normalized[branch.sources], branch.weights))
+
+    def learn_dendritic_output(
+        self, bound_state: torch.Tensor, target_pattern: torch.Tensor
+    ) -> float:
+        """Recruit O-local branches from target clamp and coincident R activity."""
+        normalized = self._normalized_branch_activity(bound_state)
+        sources = torch.where(normalized > 0)[0]
+        if len(sources) == 0:
+            return 0.0
+        weights = normalized[sources].clone()
+        recruited = 0
+        target_units = torch.where(
+            (self.region == OUTPUT) & (target_pattern > 0)
+        )[0]
+        for destination in target_units.tolist():
+            branches = self.output_dendritic_branches.setdefault(destination, [])
+            responses = [
+                self._branch_response(normalized, branch) for branch in branches
+            ]
+            if responses and max(responses) >= (
+                self.config.dendritic_branch_novelty_threshold
+            ):
+                continue
+            new_branch = OutputDendriticBranch(
+                sources=sources.clone(),
+                weights=weights.clone(),
+                warm=self.config.dendritic_branch_initial_warm,
+            )
+            if len(branches) < self.config.max_dendritic_branches_per_output:
+                branches.append(new_branch)
+                recruited += 1
+                continue
+            immature = [
+                index for index, branch in enumerate(branches)
+                if branch.cold < 0.05
+            ]
+            if immature:
+                replace = min(immature, key=responses.__getitem__)
+                branches[replace] = new_branch
+                recruited += 1
+        return recruited / max(1, len(target_units))
+
+    def dendritic_output_state(self, bound_state: torch.Tensor) -> torch.Tensor:
+        """Let each O neuron emit its strongest local branch coincidence."""
+        normalized = self._normalized_branch_activity(bound_state)
+        state = bound_state.clone()
+        state[self.region == OUTPUT] = 0.0
+        for destination, branches in self.output_dendritic_branches.items():
+            state[destination] = max(
+                (
+                    self._branch_response(normalized, branch)
+                    * self._branch_strength(branch)
+                    for branch in branches
+                ),
+                default=0.0,
+            )
+        return state
+
+    def dendritic_branch_count(self) -> int:
+        return sum(map(len, self.output_dendritic_branches.values()))
+
+    def clear_fast_synapses(self) -> None:
+        """Erase warm linear and dendritic state while retaining cold memory."""
+        self.warm.zero_()
+        for branches in self.output_dendritic_branches.values():
+            for branch in branches:
+                branch.warm = 0.0
+
+    def _dendritic_contacts(
+        self,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        sources = []
+        destinations = []
+        values = []
+        for destination, branches in self.output_dendritic_branches.items():
+            for branch in branches:
+                strength = self._branch_strength(branch)
+                sources.append(branch.sources)
+                destinations.append(
+                    torch.full_like(branch.sources, destination)
+                )
+                sign = torch.where(
+                    self.is_excitatory[branch.sources], 1.0, -1.0
+                )
+                values.append(sign * strength * branch.weights)
+        if not sources:
+            empty_index = torch.empty(0, dtype=torch.long)
+            return empty_index, empty_index.clone(), torch.empty(0)
+        return torch.cat(sources), torch.cat(destinations), torch.cat(values)
+
     def outgoing_vector(self, unit: int) -> torch.Tensor:
         """Materialize W[unit, :] for inspection; computation stays sparse."""
         row = torch.zeros(self.config.n_units)
         edge = self.src == unit
         row[self.dst[edge]] = self.effective_weights[edge]
+        branch_src, branch_dst, branch_weight = self._dendritic_contacts()
+        branch_edge = branch_src == unit
+        row.index_add_(0, branch_dst[branch_edge], branch_weight[branch_edge])
         return row
 
     def sparse_matrix(self) -> torch.Tensor:
-        indices = torch.stack([self.src, self.dst])
+        branch_src, branch_dst, branch_weight = self._dendritic_contacts()
+        indices = torch.stack(
+            [torch.cat((self.src, branch_src)), torch.cat((self.dst, branch_dst))]
+        )
+        values = torch.cat((self.effective_weights, branch_weight))
         return torch.sparse_coo_tensor(
-            indices, self.effective_weights, (self.config.n_units,) * 2
+            indices, values, (self.config.n_units,) * 2
         ).coalesce()
 
     def register_token(self, token: str, k_input: int = 4, k_output: int = 4) -> None:
@@ -571,9 +699,12 @@ class SpatialConnectome:
         self, bound_state: torch.Tensor, *, readout_steps: int = 1
     ) -> tuple[str, float, dict[str, float]]:
         """Decode an internally bound R state over the full O vocabulary."""
-        state = bound_state.clone()
-        for _ in range(readout_steps):
-            state = self.step(state)
+        if self.config.dendritic_output_enabled:
+            state = self.dendritic_output_state(bound_state)
+        else:
+            state = bound_state.clone()
+            for _ in range(readout_steps):
+                state = self.step(state)
         self.state = state
         scores = self.output_scores(state, tuple(self.output_assemblies))
         ordered = sorted(scores.items(), key=lambda item: item[1], reverse=True)
@@ -672,6 +803,8 @@ class SpatialConnectome:
     ) -> float:
         """Apply the local R->O rule to an internally formed bound state."""
         target_pattern = self.output_pattern(target)
+        if self.config.dendritic_output_enabled:
+            return self.learn_dendritic_output(bound_state, target_pattern)
         if structural_plasticity:
             self._rewire_output_inputs(bound_state, target_pattern)
         readout = self.step(bound_state)
@@ -1012,6 +1145,12 @@ class SpatialConnectome:
             ).clamp_(max=2.0)
             self.warm.mul_(self.config.warm_decay)
             self.stability_tag.mul_(self.config.warm_decay)
+            for branches in self.output_dendritic_branches.values():
+                for branch in branches:
+                    branch.cold = min(
+                        2.0, branch.cold + rate * branch.warm
+                    )
+                    branch.warm *= self.config.warm_decay
 
     def develop_positions(self, activity_samples: torch.Tensor, epochs: int = 1) -> None:
         """Early activity-dependent movement followed by topology resampling.
