@@ -249,6 +249,47 @@ recruitment, R-state somatic gain normalization, supervised property/O target cl
 In particular, supervised episode grouping is a stand-in for the real-world situation of seeing the same object
 alongside several utterances, and does not count as a biological locality success.
 
+**Answer-sentence generation goal passed** (`syllable_sentence_probe.py`, 10 seeds). The answer is now an ordered
+syllable emission rather than one O-token — `늑대가속한종류를말해` → `늑대는동물이야` — and held-out entities
+still never receive a sentence target. There is no candidate list, no teacher forcing at inference, and no
+external autoregressive decoder.
+
+| track | exact | entity | content | frame | form-only | perfect seeds | no replay | no trace | no query gate | branches |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| functional/global | **80/80** | 80/80 | 80/80 | 80/80 | 0/80 | **10/10** | — | — | — | — |
+| bio/single-connectome | **76/80** | **80/80** | **76/80** | 77/80 | 1/80 | **7/10** | **0/80** | **0/80** | 40/80 | 251 |
+
+Success is scored so that a fluent frame with wrong content cannot pass: the entity syllables, the content
+syllables and the frame are counted separately, and sentences whose frame is right but whose content is wrong are
+counted on their own line. That line reads 1/80, so the #19 generic-empathizer failure did not return. The four
+remaining errors are category misclassifications (`늑대는탈것이야`), the known residual of the goals above, not
+sentence failures.
+
+Three local mechanisms carry it, each found by diagnosis rather than designed up front. A chunk assembly is linked
+to the syllables it was recruited from; plain Hebbian let frequent syllables win on the units a chunk shares with
+other chunks, so the LTP+LTD delta already used for concepts supplies the negative term. The name replay and the
+semantic sequence are separate pathways, and the replayed name never enters the emission trace — a name is
+open-class and cannot generalize from closed-class category prototypes, which is why removing the replay drops
+entity accuracy to 0/80. A branch coincidence normalizes its meaning stream and its order stream apart and
+multiplies them; concatenated into one normalized vector the two compete for the same budget, and raising the
+emitted trace enough to end a sentence starves the query gate that selects the content.
+
+The sentence also ends without a terminal symbol or a length limit. The order stream carries no entity
+information: it reads 1.0 at every syllable the sentence still owes, 0.54 at the first spurious repeat and 0.14 at
+the next, invariant across seeds and entities, while the full score over the same span swings between 0.61 and
+2.38. So emission reuses the recruitment criterion — a branch either recognizes the present trace or the sentence
+is over.
+
+**Sentence locality audit:** satisfied — local chunk-constituent delta, name replay from the entity's own chunk,
+separated repetition and semantic pathways, two-stream dendritic coincidence, order-gated termination,
+single-connectome memory and output, no autograd/weight transport. Remaining — this goal *added two* global
+scaffolds: the constituent delta sweeps every learned chunk, and membership is read by matching against whole
+syllable assemblies. With the six inherited above that makes nine. The count has gone 4 → 7 → 9 across the last
+three goals, so "remove the global scaffolds one at a time" has not been a net reduction: each new capability has
+brought new global machinery. This is scope for a removal goal, and the longer it waits the more there is to
+remove. Note also that this is sentence generation, not grammar — `트럭는탈것이야` has the wrong particle
+(`트럭은`), no particle agreement is implemented, and the evaluator builds its targets by the same rule.
+
 ```bash
 python3 -m unittest -v test_spatial_connectome.py
 python3 spatial_connectome.py
@@ -257,7 +298,8 @@ python3 category_generalization_probe.py --seeds 20 --verify --quiet
 python3 category_memory_output_probe.py --seeds 20 --verify --quiet
 python3 dialogue_qa_probe.py --seeds 10 --verify --quiet
 python3 syllable_chunk_probe.py --seeds 10 --verify --quiet
-python3 -m unittest -v test_syllable_chunk_dialogue.py
+python3 syllable_sentence_probe.py --seeds 10
+python3 -m unittest -v test_syllable_chunk_dialogue.py test_syllable_sentence_dialogue.py
 ```
 
 ### The current performance scaffold

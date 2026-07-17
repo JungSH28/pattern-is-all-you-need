@@ -1,10 +1,21 @@
 """Answer-sentence generation for boundary-free syllable questions.
 
 ``syllable_chunk_dialogue`` answers with one O-token.  Here the answer is an
-ordered syllable emission.  Serial order comes from O-local dendritic branches
-whose presynaptic sources include a decaying trace of the O assemblies just
-emitted, so the sequence is produced inside the connectome rather than by an
-external autoregressive decoder.
+ordered syllable emission produced inside the connectome, with no external
+autoregressive decoder, no terminal symbol and no candidate list.
+
+An answer sentence draws on two pathways because its parts have different
+origins.  The content is closed-class and generalizes from category prototypes
+through R.  The entity's name is open-class -- a held-out entity never receives
+a sentence target -- so it can only come from that entity's own chunk driving
+the syllable assemblies it was recruited from.  The two are kept apart: the
+replayed name never enters the emission trace.
+
+Serial order comes from O-local dendritic branches whose presynaptic sources
+include a decaying trace of the O assemblies just emitted.  A branch normalizes
+its meaning stream and its order stream separately and multiplies them, so the
+two do not compete for one budget, and the order stream alone decides when the
+sentence is over.
 
 Two tracks share the interface:
 
@@ -12,7 +23,8 @@ Two tracks share the interface:
   question and unpack a chunk into its syllables.  Both are global devices and
   are declared as the capability ceiling, not as biological mechanisms.
 * ``ConnectomeSentenceDialogue`` extends the single connectome of
-  ``ConnectomeSyllableDialogue`` and may use neither.
+  ``ConnectomeSyllableDialogue`` and may use neither.  ``locality_audit``
+  exposes what it still leans on.
 """
 
 from __future__ import annotations
@@ -86,7 +98,6 @@ class ConnectomeSentenceDialogue(ConnectomeSyllableDialogue):
         output_units: int = 256,
         trace_decay: float = 0.5,
         trace_length: int = 3,
-        trace_gain: float = 1.0,
         max_emission: int = 14,
         constituent_gate: float = 0.55,
         use_replay: bool = True,
@@ -95,7 +106,6 @@ class ConnectomeSentenceDialogue(ConnectomeSyllableDialogue):
         super().__init__(seed=seed, output_units=output_units)
         self.trace_decay = trace_decay
         self.trace_length = trace_length
-        self.trace_gain = trace_gain
         self.max_emission = max_emission
         self.constituent_gate = constituent_gate
         self.use_replay = use_replay
@@ -167,10 +177,7 @@ class ConnectomeSentenceDialogue(ConnectomeSyllableDialogue):
         if recent:
             trace = emission_trace(recent, decay=self.trace_decay)
             output = self.connectome.region == OUTPUT
-            # R carries far more active units than a few emitted syllables, so
-            # an unscaled trace barely moves the branch coincidence and a branch
-            # recruited at sentence start keeps firing after the sentence ends.
-            bound[output] = self.trace_gain * trace[output]
+            bound[output] = trace[output]
         return bound
 
     def _branch_syllable(
