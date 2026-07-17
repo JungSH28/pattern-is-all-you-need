@@ -50,6 +50,8 @@ class ConnectomeConfig:
     repulsion_strength: float = 0.03
     consolidation_rate: float = 0.08
     warm_decay: float = 0.90
+    synaptic_stability_rate: float = 1.0
+    synaptic_stability_strength: float = 0.0
     recurrent_learning_scale: float = 0.10
     concept_rewire_per_input: int = 4
     output_rewire_per_source: int = 1
@@ -80,6 +82,9 @@ class SpatialConnectome:
         base *= 0.75 + 0.5 * torch.rand(len(self.src), generator=self.generator)
         self.cold = base
         self.warm = torch.zeros_like(base)
+        # Edge-local metaplastic state. Only actual warm->cold transfer raises
+        # stability, so untouched developmental weights remain plastic.
+        self.stability = torch.zeros_like(base)
         self.state = torch.zeros(config.n_units)
 
         self.input_assemblies: dict[str, torch.Tensor] = {}
@@ -166,6 +171,12 @@ class SpatialConnectome:
     @property
     def effective_weights(self) -> torch.Tensor:
         return self.signs * (self.cold + self.warm).clamp_min(0.0)
+
+    @property
+    def local_plasticity(self) -> torch.Tensor:
+        """Per-edge learning availability from that edge's own history."""
+        strength = self.config.synaptic_stability_strength
+        return 1.0 / (1.0 + strength * self.stability)
 
     def outgoing_vector(self, unit: int) -> torch.Tensor:
         """Materialize W[unit, :] for inspection; computation stays sparse."""
@@ -501,6 +512,7 @@ class SpatialConnectome:
             self.signs[output_edge]
             * free[self.src[output_edge]]
             * output_error
+            * self.local_plasticity[output_edge]
         )
         self.warm[output_edge] = (
             self.warm[output_edge] + learning_rate * delta
@@ -532,6 +544,7 @@ class SpatialConnectome:
             self.signs[output_edge]
             * free[self.src[output_edge]]
             * output_error
+            * self.local_plasticity[output_edge]
         )
         self.warm[output_edge] = (
             self.warm[output_edge] + learning_rate * delta
@@ -561,6 +574,7 @@ class SpatialConnectome:
             self.signs[output_edge]
             * bound_state[self.src[output_edge]]
             * output_error
+            * self.local_plasticity[output_edge]
         )
         self.warm[output_edge] = (
             self.warm[output_edge] + learning_rate * delta
@@ -607,12 +621,18 @@ class SpatialConnectome:
             )[:number]
             replacement_pool = output_edges[~torch.isin(existing, target_units)]
             magnitude = (self.cold + self.warm).abs()[replacement_pool]
+            protection = (
+                self.config.synaptic_stability_strength
+                * self.stability[replacement_pool]
+            )
             if self.config.structural_rewire_mode == "weakest":
                 replacement = replacement_pool[
-                    torch.topk(magnitude, number, largest=False).indices
+                    torch.topk(
+                        magnitude + protection, number, largest=False
+                    ).indices
                 ]
             elif self.config.structural_rewire_mode == "local_stochastic":
-                prune_probability = 1.0 / (magnitude + 0.05)
+                prune_probability = 1.0 / (magnitude + protection + 0.05)
                 replacement = replacement_pool[
                     torch.multinomial(
                         prune_probability,
@@ -629,6 +649,7 @@ class SpatialConnectome:
             self.dst[replacement] = candidates[selected]
             self.cold[replacement] = 0.0
             self.warm[replacement] = self.config.initial_weight
+            self.stability[replacement] = 0.0
 
     def learn_association(
         self,
@@ -673,7 +694,9 @@ class SpatialConnectome:
         # Warm plasticity is signed: positive change is LTP and negative change
         # is LTD. Dale's law constrains the sign of the effective outgoing
         # synapse, while its non-negative magnitude may strengthen or weaken.
-        self.warm.add_(learning_rate * delta).clamp_(min=-1.5, max=1.5)
+        self.warm.add_(
+            learning_rate * delta * self.local_plasticity
+        ).clamp_(min=-1.5, max=1.5)
         return float(delta.abs().mean().item())
 
     def learn_concept(
@@ -714,7 +737,7 @@ class SpatialConnectome:
             delta = torch.zeros_like(self.warm)
             delta[entity_edge] = (
                 target[self.dst[entity_edge]] - free[self.dst[entity_edge]]
-            )
+            ) * self.local_plasticity[entity_edge]
             self.warm.add_(learning_rate * delta).clamp_(min=-1.5, max=1.5)
             if iteration % consolidate_every == 0:
                 self.consolidate()
@@ -746,7 +769,9 @@ class SpatialConnectome:
             )
             target = self.simultaneous_state(properties, steps=settle_steps)
             delta = torch.zeros_like(self.warm)
-            delta[edge] = target[self.dst[edge]] - free[self.dst[edge]]
+            delta[edge] = (
+                target[self.dst[edge]] - free[self.dst[edge]]
+            ) * self.local_plasticity[edge]
             self.warm.add_(learning_rate * delta).clamp_(min=-1.5, max=1.5)
             if iteration % consolidate_every == 0:
                 self.consolidate()
@@ -801,10 +826,19 @@ class SpatialConnectome:
 
             if self.config.structural_rewire_mode == "weakest":
                 replacement = torch.topk(
-                    target[existing], number, largest=False
+                    target[existing]
+                    + self.config.synaptic_stability_strength
+                    * self.stability[source_edges],
+                    number,
+                    largest=False,
                 ).indices
             elif self.config.structural_rewire_mode == "local_stochastic":
-                prune_probability = 1.0 / (target[existing] + 0.05)
+                prune_probability = 1.0 / (
+                    target[existing]
+                    + self.config.synaptic_stability_strength
+                    * self.stability[source_edges]
+                    + 0.05
+                )
                 replacement = torch.multinomial(
                     prune_probability,
                     number,
@@ -820,6 +854,7 @@ class SpatialConnectome:
             self.dst[edge_indices] = new_destinations
             self.cold[edge_indices] = self.config.initial_weight
             self.warm[edge_indices] = 0.0
+            self.stability[edge_indices] = 0.0
 
     def consolidate(self, cycles: int = 1) -> None:
         """Transfer fast synaptic change into the slow variable on each edge."""
@@ -827,7 +862,11 @@ class SpatialConnectome:
             raise ValueError("cycles must be non-negative")
         rate = self.config.consolidation_rate
         for _ in range(cycles):
-            self.cold.add_(rate * self.warm).clamp_(min=0.0, max=2.0)
+            transfer = rate * self.warm
+            self.cold.add_(transfer).clamp_(min=0.0, max=2.0)
+            self.stability.add_(
+                self.config.synaptic_stability_rate * transfer.abs()
+            ).clamp_(max=2.0)
             self.warm.mul_(self.config.warm_decay)
 
     def develop_positions(self, activity_samples: torch.Tensor, epochs: int = 1) -> None:
