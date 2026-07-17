@@ -316,6 +316,10 @@ region maximum, no region sum — so the active count is whatever crosses thresh
 | answer sentence, exact | 76/80 | **80/80** |
 | answer sentence, perfect seeds | 7/10 | **10/10** |
 
+The fixed top-k control is also rescored inside the same run on the same seeds (`fixed_topk`, 76/80), so
+the +4/80 contribution is not a comparison against numbers from an earlier commit. The other ablations
+are unchanged: no replay 0/80, no trace 0/80, no query gate 40/80.
+
 Every probe held its floor and three improved, which was not the expectation for a removal goal. Two of
 my diagnoses along the way were wrong and measurement corrected them. Homeostasis first looked like it
 destroyed the category geometry; in fact the control loop was misbuilt — the threshold moved ten times
