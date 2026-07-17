@@ -253,6 +253,91 @@ class SpatialConnectomeTests(unittest.TestCase):
         degree_after = torch.bincount(model.src, minlength=model.config.n_units)
         self.assertTrue(torch.equal(degree_before, degree_after))
 
+    def test_dendritic_output_recruits_from_local_coactivity(self):
+        model = SpatialConnectome(
+            ConnectomeConfig(
+                n_input=24,
+                n_substrate=48,
+                n_output=24,
+                out_degree=12,
+                dendritic_output_enabled=True,
+                seed=13,
+            )
+        )
+        model.register_vocabulary(("target", "distractor"))
+        bound = torch.zeros(model.config.n_units)
+        substrate = torch.where(model.region == SUBSTRATE)[0]
+        bound[substrate[:6]] = torch.linspace(0.4, 0.9, 6)
+        target = model.output_pattern("target")
+
+        model.learn_bound_output(bound, "target")
+        self.assertEqual(model.dendritic_branch_count(), 4)
+        self.assertEqual(model.warm.abs().sum().item(), 0.0)
+        self.assertEqual(
+            set(model.output_dendritic_branches),
+            set(torch.where(target > 0)[0].tolist()),
+        )
+        for branches in model.output_dendritic_branches.values():
+            self.assertEqual(len(branches), 1)
+            self.assertTrue(torch.all(bound[branches[0].sources] > 0))
+
+        model.learn_bound_output(bound, "target")
+        self.assertEqual(model.dendritic_branch_count(), 4)
+        predicted, _, scores = model.predict_bound_output(bound)
+        self.assertEqual(predicted, "target")
+        self.assertEqual(set(scores), set(model.output_assemblies))
+
+    def test_dendritic_output_consolidates_without_overwrite(self):
+        model = SpatialConnectome(
+            ConnectomeConfig(
+                n_input=24,
+                n_substrate=48,
+                n_output=24,
+                out_degree=12,
+                dendritic_output_enabled=True,
+                max_dendritic_branches_per_output=1,
+                seed=17,
+            )
+        )
+        model.register_vocabulary(("target", "distractor"))
+        substrate = torch.where(model.region == SUBSTRATE)[0]
+        first = torch.zeros(model.config.n_units)
+        second = torch.zeros_like(first)
+        first[substrate[:6]] = 1.0
+        second[substrate[6:12]] = 1.0
+        model.learn_bound_output(first, "target")
+
+        lesion = copy.deepcopy(model)
+        lesion.clear_fast_synapses()
+        self.assertEqual(
+            lesion.predict_bound_output(first)[2]["target"], 0.0
+        )
+
+        model.consolidate(cycles=100)
+        model.clear_fast_synapses()
+        cold_before = [
+            branch.cold
+            for branches in model.output_dendritic_branches.values()
+            for branch in branches
+        ]
+        self.assertTrue(all(value > 0 for value in cold_before))
+        self.assertEqual(model.predict_bound_output(first)[0], "target")
+
+        model.learn_bound_output(second, "target")
+        self.assertEqual(model.dendritic_branch_count(), 4)
+        cold_after = [
+            branch.cold
+            for branches in model.output_dendritic_branches.values()
+            for branch in branches
+        ]
+        self.assertEqual(cold_after, cold_before)
+
+        matrix = model.sparse_matrix().to_dense()
+        for unit in substrate[:6]:
+            self.assertTrue(
+                torch.allclose(matrix[unit], model.outgoing_vector(int(unit)))
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
