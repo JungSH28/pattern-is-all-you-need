@@ -53,6 +53,7 @@ class ConnectomeConfig:
     synaptic_stability_rate: float = 1.0
     synaptic_stability_strength: float = 0.0
     target_local_output_plasticity: bool = False
+    output_commitment_threshold: float = 0.0
     recurrent_learning_scale: float = 0.10
     concept_rewire_per_input: int = 4
     output_rewire_per_source: int = 1
@@ -193,6 +194,32 @@ class SpatialConnectome:
             # silent non-target neurons receive no exact negative-label signal.
             error = error * (target > 0)
         return error
+
+    def _output_source_plasticity(
+        self,
+        target_pattern: torch.Tensor,
+        output_edge: torch.Tensor,
+    ) -> torch.Tensor:
+        """Gate target learning by each R neuron's own consolidated terminals.
+
+        A source with a mature R->O contact may keep learning that target but
+        does not acquire a competing target. No other source or network-wide
+        importance estimate is consulted.
+        """
+        threshold = self.config.output_commitment_threshold
+        if threshold <= 0.0:
+            return torch.ones(
+                int(output_edge.sum().item()), dtype=self.warm.dtype
+            )
+        target_units = target_pattern > 0
+        mature = output_edge & (self.stability >= threshold)
+        committed = torch.zeros(self.config.n_units, dtype=torch.bool)
+        same_target = torch.zeros_like(committed)
+        committed[self.src[mature]] = True
+        matching = mature & target_units[self.dst]
+        same_target[self.src[matching]] = True
+        source_allowed = ~committed | same_target
+        return source_allowed[self.src[output_edge]].float()
 
     def outgoing_vector(self, unit: int) -> torch.Tensor:
         """Materialize W[unit, :] for inspection; computation stays sparse."""
@@ -522,11 +549,15 @@ class SpatialConnectome:
             self.region[self.dst] == OUTPUT
         )
         output_error = self._output_error(target_pattern, readout, output_edge)
+        source_plasticity = self._output_source_plasticity(
+            target_pattern, output_edge
+        )
         delta = (
             self.signs[output_edge]
             * free[self.src[output_edge]]
             * output_error
             * self.local_plasticity[output_edge]
+            * source_plasticity
         )
         self.warm[output_edge] = (
             self.warm[output_edge] + learning_rate * delta
@@ -552,11 +583,15 @@ class SpatialConnectome:
             self.region[self.dst] == OUTPUT
         )
         output_error = self._output_error(target_pattern, readout, output_edge)
+        source_plasticity = self._output_source_plasticity(
+            target_pattern, output_edge
+        )
         delta = (
             self.signs[output_edge]
             * free[self.src[output_edge]]
             * output_error
             * self.local_plasticity[output_edge]
+            * source_plasticity
         )
         self.warm[output_edge] = (
             self.warm[output_edge] + learning_rate * delta
@@ -580,11 +615,15 @@ class SpatialConnectome:
             self.region[self.dst] == OUTPUT
         )
         output_error = self._output_error(target_pattern, readout, output_edge)
+        source_plasticity = self._output_source_plasticity(
+            target_pattern, output_edge
+        )
         delta = (
             self.signs[output_edge]
             * bound_state[self.src[output_edge]]
             * output_error
             * self.local_plasticity[output_edge]
+            * source_plasticity
         )
         self.warm[output_edge] = (
             self.warm[output_edge] + learning_rate * delta
@@ -617,6 +656,14 @@ class SpatialConnectome:
             if len(output_edges) == 0:
                 continue
             existing = self.dst[output_edges]
+            threshold = self.config.output_commitment_threshold
+            mature = self.stability[output_edges] >= threshold
+            if (
+                threshold > 0.0
+                and bool(mature.any())
+                and not bool(torch.isin(existing[mature], target_units).any())
+            ):
+                continue
             present = int(torch.isin(existing, target_units).sum().item())
             number = min(required - present, len(output_edges))
             if number <= 0:
