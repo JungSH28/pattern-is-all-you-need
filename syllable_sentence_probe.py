@@ -226,9 +226,21 @@ def functional_result(seed: int) -> dict[str, object]:
 
 
 def _trained_bio(
-    seed: int, *, concept_rounds: int, sentence_rounds: int, **flags
+    seed: int,
+    *,
+    concept_rounds: int,
+    sentence_rounds: int,
+    fixed_topk: bool = False,
+    **flags,
 ) -> ConnectomeSentenceDialogue:
     model = ConnectomeSentenceDialogue(seed=seed, **flags)
+    if fixed_topk:
+        # The control this goal replaced: rank each region into a fixed active
+        # quota instead of letting each neuron fire on its own threshold.
+        config = model.connectome.config
+        object.__setattr__(config, "homeostatic_threshold", False)
+        object.__setattr__(config, "max_region_density", 0.18)
+        object.__setattr__(config, "max_output_density", 0.10)
     model.register_syllable_vocabulary(sentence_vocabulary_texts())
     model.register_syllable_output(sentence_vocabulary_texts())
     model.observe_streams(stage_streams(CONCEPTS, LABELED))
@@ -262,7 +274,12 @@ def bio_result(
     # that the intact mechanism recruited.
     no_replay = build(use_replay=False)
     no_trace = build(use_trace=False)
+    topk = build(fixed_topk=True)
     ablations = {
+        "fixed_topk": sum(
+            judge(item, topk.generate(item.question)).exact
+            for item in heldout_sentences()
+        ),
         "no_replay": sum(
             judge(item, no_replay.generate(item.question)).entity_ok
             for item in heldout_sentences()
@@ -307,7 +324,11 @@ def main() -> None:
         first = results[0]
         print(f"\n=== {first['track']} ({arguments.seeds} seeds) ===", flush=True)
         keys = ["exact", "entity", "content", "frame", "form_only"]
-        keys += [key for key in ("no_replay", "no_trace", "no_control") if key in first]
+        keys += [
+            key
+            for key in ("fixed_topk", "no_replay", "no_trace", "no_control")
+            if key in first
+        ]
         for key in keys:
             total = sum(int(item[key]) for item in results)
             denominator = sum(int(item["total"]) for item in results)

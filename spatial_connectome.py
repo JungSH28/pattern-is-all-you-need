@@ -43,6 +43,20 @@ class ConnectomeConfig:
     leak: float = 0.35
     max_region_density: float = 0.18
     max_output_density: float | None = None
+    # Homeostatic firing replaces the global top-k/max activity selection. Each
+    # neuron owns a threshold and adjusts it from its own firing rate alone, so
+    # the active count varies per input instead of being ranked into a quota.
+    homeostatic_threshold: bool = False
+    firing_rate_floor: float = 0.02
+    firing_rate_ceiling: float = 0.20
+    # The rate estimate is the sensor and the threshold is the actuator, so
+    # the actuator must not outrun it: 0.02 overshoots into silence, 0.0002
+    # never controls and the region saturates.
+    threshold_adaptation_rate: float = 0.002
+    firing_rate_trace: float = 0.002
+    minimum_firing_threshold: float = 0.01
+    intrinsic_stability_strength: float = 0.0
+    intrinsic_stability_rate: float = 1.0
     steps_per_token: int = 3
     position_lr: float = 0.08
     position_lr_decay: float = 0.75
@@ -110,6 +124,13 @@ class SpatialConnectome:
         self.stability = torch.zeros_like(base)
         self.stability_tag = torch.zeros_like(base)
         self.state = torch.zeros(config.n_units)
+        # Intrinsic excitability, one value per neuron (Turrigiano homeostasis).
+        self.firing_threshold = torch.full((config.n_units,), config.threshold)
+        self.firing_rate = torch.full(
+            (config.n_units,),
+            0.5 * (config.firing_rate_floor + config.firing_rate_ceiling),
+        )
+        self.threshold_stability = torch.zeros(config.n_units)
 
         self.input_assemblies: dict[str, torch.Tensor] = {}
         self.output_assemblies: dict[str, torch.Tensor] = {}
@@ -623,13 +644,17 @@ class SpatialConnectome:
         return expanded
 
     def sensory_assembly_state(
-        self, pattern: torch.Tensor, *, steps: int = 2
+        self, pattern: torch.Tensor, *, steps: int = 2, plastic: bool = False
     ) -> torch.Tensor:
         """Evoke R activity from a learned input assembly without a token ID."""
         sensory = self.expanded_input_pattern(pattern)
         state = torch.zeros(self.config.n_units)
         for inner in range(steps):
-            state = self.step(state, sensory=sensory if inner == 0 else None)
+            state = self.step(
+                state,
+                sensory=sensory if inner == 0 else None,
+                plastic=plastic,
+            )
         return state
 
     def sensory_assembly_gate(
@@ -666,7 +691,7 @@ class SpatialConnectome:
         return pattern
 
     def simultaneous_state(
-        self, tokens: Sequence[str], *, steps: int = 2
+        self, tokens: Sequence[str], *, steps: int = 2, plastic: bool = False
     ) -> torch.Tensor:
         """Evoked state for co-present sensory properties.
 
@@ -679,7 +704,7 @@ class SpatialConnectome:
             sensory = torch.maximum(sensory, self.sensory_pattern(token))
         state = torch.zeros_like(sensory)
         for _ in range(steps):
-            state = self.step(state, sensory=sensory)
+            state = self.step(state, sensory=sensory, plastic=plastic)
         return state
 
     @staticmethod
@@ -703,11 +728,51 @@ class SpatialConnectome:
                 capped[indices[~mask]] = 0.0
         return capped
 
+    def _adapt_firing_thresholds(self, activity: torch.Tensor) -> None:
+        """Each neuron tracks its own rate and retunes its own threshold.
+
+        Nothing here reads another neuron: no region rank, no region maximum,
+        no region sum.
+
+        Homeostasis keeps a neuron out of silence and out of runaway; it does
+        not equalize rates.  Driving every rate to one set-point flattens the
+        selectivity the category geometry is made of -- a unit that should
+        answer only to animals gets its threshold dragged down until it answers
+        to everything.  Cortical rates are broadly distributed, so the rule only
+        acts outside a band and leaves the neuron alone inside it.
+        """
+        config = self.config
+        fired = (activity > 0).float()
+        self.firing_rate += config.firing_rate_trace * (fired - self.firing_rate)
+        excess = (self.firing_rate - config.firing_rate_ceiling).clamp_min(0.0)
+        deficit = (config.firing_rate_floor - self.firing_rate).clamp_min(0.0)
+        self.firing_threshold += (
+            config.threshold_adaptation_rate
+            * self.intrinsic_plasticity
+            * (excess - deficit)
+        )
+        self.firing_threshold.clamp_(min=config.minimum_firing_threshold)
+
+    @property
+    def intrinsic_plasticity(self) -> torch.Tensor:
+        """Per-neuron retuning availability from that neuron's own history.
+
+        A threshold is a fast variable shared by every memory the neuron takes
+        part in.  Left free it is a hole in the synaptic stability-plasticity
+        solution: later learning retunes it and moves the R activity that older
+        concepts were consolidated against.  It consolidates on the same
+        warm->cold schedule the synapses use.
+        """
+        strength = self.config.intrinsic_stability_strength
+        return 1.0 / (1.0 + strength * self.threshold_stability)
+
     def step(
         self,
         state: torch.Tensor,
         sensory: torch.Tensor | None = None,
         teacher: torch.Tensor | None = None,
+        *,
+        plastic: bool = False,
     ) -> torch.Tensor:
         drive = torch.zeros_like(state)
         weights = self.effective_weights
@@ -728,14 +793,25 @@ class SpatialConnectome:
             weights = weights.clone()
             weights[output_edge] *= gain[self.dst[output_edge]]
         drive.scatter_add_(0, self.dst, state[self.src] * weights)
-        activity = F.relu((1.0 - self.config.leak) * state + drive - self.config.threshold)
-        activity = self._cap_region_activity(activity)
+        potential = (1.0 - self.config.leak) * state + drive
+        if self.config.homeostatic_threshold:
+            activity = F.relu(potential - self.firing_threshold)
+        else:
+            activity = F.relu(potential - self.config.threshold)
+            activity = self._cap_region_activity(activity)
         if sensory is not None:
             input_units = self.region == INPUT
             activity[input_units] = torch.maximum(activity[input_units], sensory[input_units])
         if teacher is not None:
             output_units = self.region == OUTPUT
             activity[output_units] = torch.maximum(activity[output_units], teacher[output_units])
+        if self.config.homeostatic_threshold:
+            # A neuron cannot fire harder than its own ceiling. This replaces
+            # dividing the region by whichever neuron happened to fire most.
+            activity = activity.clamp_max(1.0)
+            if plastic:
+                self._adapt_firing_thresholds(activity)
+            return activity
         maximum = activity.max()
         if maximum > 1.0:
             activity = activity / maximum
@@ -1158,9 +1234,11 @@ class SpatialConnectome:
         )
         for iteration in range(rounds):
             free = self.sensory_assembly_state(
-                sensory_code, steps=settle_steps
+                sensory_code, steps=settle_steps, plastic=True
             )
-            target = self.simultaneous_state(properties, steps=settle_steps)
+            target = self.simultaneous_state(
+                properties, steps=settle_steps, plastic=True
+            )
             delta = torch.zeros_like(self.warm)
             delta[edge] = (
                 target[self.dst[edge]] - free[self.dst[edge]]
@@ -1279,6 +1357,11 @@ class SpatialConnectome:
             ).clamp_(max=2.0)
             self.warm.mul_(self.config.warm_decay)
             self.stability_tag.mul_(self.config.warm_decay)
+            # A neuron that has taken part in consolidated memory locks its own
+            # excitability, on the same schedule as its synapses.
+            self.threshold_stability.add_(
+                self.config.intrinsic_stability_rate * rate
+            ).clamp_(max=2.0)
             for branches in self.output_dendritic_branches.values():
                 for branch in branches:
                     branch.cold = min(

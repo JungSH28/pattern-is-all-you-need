@@ -313,8 +313,16 @@ def _winning_patterns(
     return paths[length]
 
 
-def _sparsify_and_normalize(activity: torch.Tensor, *, max_active: int) -> torch.Tensor:
-    if torch.count_nonzero(activity) > max_active:
+def _sparsify_and_normalize(
+    activity: torch.Tensor, *, max_active: int | None
+) -> torch.Tensor:
+    """Normalize, and optionally rank the region into a fixed active quota.
+
+    ``max_active=None`` drops the quota. Ranking a region is the global
+    activity-selection scaffold; the connectome track fires on per-neuron
+    homeostatic thresholds instead.
+    """
+    if max_active is not None and torch.count_nonzero(activity) > max_active:
         winners = torch.topk(activity, max_active).indices
         sparse = torch.zeros_like(activity)
         sparse[winners] = activity[winners]
@@ -335,6 +343,8 @@ class SyllableLocalityAudit:
     mature_branch_preservation: bool
     query_control_from_learned_temporal_activity: bool
     local_query_control_prototype_update: bool
+    homeostatic_threshold_firing: bool
+    intrinsic_excitability_consolidation: bool
     no_autograd_or_weight_transport: bool
     global_teacher_target: bool
     global_fact_episode_intersection: bool
@@ -612,6 +622,8 @@ class BioLocalSyllableDialogue(_SyllableDialogueBase):
             mature_branch_preservation=False,
             query_control_from_learned_temporal_activity=True,
             local_query_control_prototype_update=False,
+            homeostatic_threshold_firing=False,
+            intrinsic_excitability_consolidation=False,
             no_autograd_or_weight_transport=True,
             global_teacher_target=True,
             global_fact_episode_intersection=False,
@@ -640,8 +652,8 @@ class ConnectomeSyllableDialogue:
                 out_degree=192,
                 topology="random",
                 steps_per_token=2,
-                max_region_density=0.18,
-                max_output_density=0.10,
+                homeostatic_threshold=True,
+                intrinsic_stability_strength=100.0,
                 initial_weight=0.08,
                 structural_rewire_mode="local_stochastic",
                 synaptic_stability_strength=100.0,
@@ -760,7 +772,7 @@ class ConnectomeSyllableDialogue:
         if not controls:
             return self.chunker.feature(text, temporal=False)
         control = torch.stack(controls).sum(0)
-        return _sparsify_and_normalize(control, max_active=192)
+        return _sparsify_and_normalize(control, max_active=None)
 
     def learn_query_control(
         self,
@@ -877,11 +889,13 @@ class ConnectomeSyllableDialogue:
             mature_branch_preservation=True,
             query_control_from_learned_temporal_activity=True,
             local_query_control_prototype_update=True,
+            homeostatic_threshold_firing=True,
+            intrinsic_excitability_consolidation=True,
             no_autograd_or_weight_transport=True,
             global_teacher_target=True,
             global_fact_episode_intersection=True,
             global_window_enumeration=True,
-            global_sparse_activity_competition=True,
+            global_sparse_activity_competition=False,
             global_seed_balancing=True,
             global_output_argmax=True,
         )

@@ -74,10 +74,13 @@ class BoundaryFreeEndToEndTests(unittest.TestCase):
         self.assertTrue(audit.mature_branch_preservation)
         self.assertTrue(audit.query_control_from_learned_temporal_activity)
         self.assertTrue(audit.local_query_control_prototype_update)
+        self.assertTrue(audit.homeostatic_threshold_firing)
+        self.assertTrue(audit.intrinsic_excitability_consolidation)
         self.assertTrue(audit.global_window_enumeration)
         self.assertTrue(audit.global_fact_episode_intersection)
-        self.assertTrue(audit.global_sparse_activity_competition)
         self.assertTrue(audit.global_output_argmax)
+        # Retired: activity is no longer ranked into a per-region quota.
+        self.assertFalse(audit.global_sparse_activity_competition)
 
 
 if __name__ == "__main__":

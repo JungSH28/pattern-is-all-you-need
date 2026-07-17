@@ -1,39 +1,47 @@
 # pattern-is-all-you-need
 
-A research project on sparse language models that represent tokens and concepts as activity patterns
-over sets of vectors/units rather than as single embedding rows. The end goal is a model that uses this
-representation in real dialogue. I develop it along two tracks in parallel: a **functional track** and a
-**bio-local track**. The bio-local track must work without backprop — wiring, learning, and memory all
-have to be local — and when a computation is blocked, I look for the way through in biological
-mechanisms. **Simple dialogue** is not the final definition of success; it is the first external
-milestone.
+**The model is a network of vectors. A vector *is* its connection weights to the other vectors, not a row
+in a table those weights are applied to. A token or a concept is the set of vectors that activate
+together.** That is where this started, and everything else follows from it.
+
+From there I borrow mechanisms from biology, because the brain is the one system that already computes
+this way. The end goal is a model that uses this representation in real dialogue. **Simple dialogue** is
+not the final definition of success; it is the first external milestone.
+
+Sparsity is not the objective. Assemblies come out sparse here because a sparse prior is given, and the
+guess — and it is a guess, and partly a rationalization — is that a network of this kind gets sparse on
+its own at brain-like scale. Nothing in this repository tests that.
 
 > The full process, evidence, and the paths I rejected live in my wiki at
-> `research/pattern-is-all-you-need.md` (#1–#30). This README is a summary of the current state and how
+> `research/pattern-is-all-you-need.md` (#1–#33). This README is a summary of the current state and how
 > to reproduce it.
 
 ### Current direction
 
-Encode tokens as sets of vectors into a model usable in dialogue, and build the same thing again in a
-bio-local model, taking the breakthroughs from biological mechanisms.
+Two tracks, differing in exactly one thing — whether locality is required:
 
-The invariant both tracks share: **encode tokens and concepts as vector/unit assemblies rather than
-single embedding rows, and make context, category, memory, and thought operate out of those connections
-and activations, surfacing as dialogue.**
+1. **Functional track** — *assembly representation + dialogue.* Tokens and concepts stay vector/unit
+   assemblies, and the model has to be usable in real dialogue. Any engineering learning method is
+   allowed; the obligation is to record separately which non-local device contributed which part of the
+   performance. This track measures the ceiling and finds the bottleneck.
+2. **Bio-local track** — *assembly representation + local biological mechanism + dialogue.* The same
+   dialogue ability, built from local synaptic information and local dynamics. Global error, global
+   top-k, global weakest-edge search and global seed balancing do not count as biological success; they
+   get replaced by local mechanisms one at a time. This track is the main line.
 
-1. **Functional track**: build a model usable in real dialogue while keeping this representation. Any
-   engineering learning method is allowed, but I record separately which non-local device contributed
-   which part of the performance.
-2. **Bio-local track**: implement the same dialogue ability with local synaptic information and sparse
-   dynamics. Scaffolds like global error, global top-k, or global weakest-edge search do not count as
-   biological success — they get replaced by local mechanisms one at a time.
-3. **Breakthrough principle**: when the bio track gets stuck, I do not smuggle attention/backprop back in.
-   I form computational hypotheses from biological mechanisms — local inhibition, dendritic feedback,
-   structural plasticity, replay, consolidation, neuromodulation — and test them with functional and
-   ablation experiments.
-4. **Evaluation principle**: dialogue quality on the functional track and locality plus dialogue quality
-   on the bio track are measured in separate tables. A functional-model success is never added to the
-   bio-model's score.
+Both share the same invariant and the same destination: **encode tokens and concepts as vector/unit
+assemblies rather than single embedding rows, and make context, category, memory, and thought operate
+out of those connections and activations, surfacing as dialogue.** A functional-track result is never
+counted as bio-track evidence.
+
+**Breakthrough principle**: when the bio track gets stuck, I do not smuggle attention/backprop back in.
+I form computational hypotheses from biological mechanisms — local inhibition, dendritic feedback,
+structural plasticity, replay, consolidation, neuromodulation — and test them with functional and
+ablation experiments. What gets transplanted is the shape of the problem the brain solves, not the
+brain's exact formulas; the constants are mine to fit.
+
+**Evaluation principle**: dialogue quality on the functional track, and locality plus dialogue quality on
+the bio track, are measured in separate tables.
 
 ### Layers of the goal
 
@@ -48,9 +56,11 @@ and activations, surfacing as dialogue.**
 
 ## 1. Thesis
 
-- **Token/concept = sparse cell assembly.** Sensory input may hand over a stable sparse seed, but the
-  assemblies and semantic relations in the storage/reasoning substrate have to form out of connectivity
-  and activity.
+- **A vector is its own weights.** Weights are not a separate matrix applied to vectors; a unit's vector
+  *is* its outgoing row of the connectome. This is the starting point, not a compression trick.
+- **Token/concept = cell assembly.** Sensory input may hand over a stable seed, but the assemblies and
+  semantic relations in the storage/reasoning substrate have to form out of connectivity and activity.
+  Assemblies are sparse here because a sparse prior is given, not because sparsity is the aim.
 - **Two learning tracks.** The functional track keeps the assembly representation and looks for the
   ceiling and the bottleneck of dialogue capability. The bio track reproduces the same ability with local
   rules and no weight transport; feedback alignment is not the final answer either, it is an engineering
@@ -290,8 +300,55 @@ brought new global machinery. This is scope for a removal goal, and the longer i
 remove. Note also that this is sentence generation, not grammar — `트럭는탈것이야` has the wrong particle
 (`트럭은`), no particle agreement is implemented, and the evaluator builds its targets by the same rule.
 
+**Global top-k activity selection removed** (`test_homeostatic_firing.py`). Ranking a region into a fixed
+active quota is something no neuron can do, and it was the most pervasive of the scaffolds the two-track
+split disqualifies. It is replaced by what this project's own design principle already prescribes: each
+neuron owns a firing threshold and retunes it from its own firing history alone — no region rank, no
+region maximum, no region sum — so the active count is whatever crosses threshold and varies per input.
+
+| probe | baseline (global top-k) | homeostatic threshold |
+|---|---:|---:|
+| first QA (boundary-free syllable) | 8/8 | 8/8 |
+| retention after later learning | 7.25/8 | **8/8** |
+| new learning | 3.75/4 | **4/4** |
+| perfect seeds (continual) | 60% | **6/6** |
+| branches recruited | 227 | **96** |
+| answer sentence, exact | 76/80 | **80/80** |
+| answer sentence, perfect seeds | 7/10 | **10/10** |
+
+Every probe held its floor and three improved, which was not the expectation for a removal goal. Two of
+my diagnoses along the way were wrong and measurement corrected them. Homeostasis first looked like it
+destroyed the category geometry; in fact the control loop was misbuilt — the threshold moved ten times
+faster than the firing-rate estimate it reads, so it overshot into silence (density 0.025), while a
+tenfold slower actuator never controlled anything and the region saturated (density 0.95). With the loop
+matched, the category gap came out *wider* than the baseline's (+0.44/+0.54 against +0.26/+0.14), so the
+premise that top-k was carrying the geometry was itself wrong. Second, I had built homeostasis as a
+rate equalizer, which flattens the selectivity the geometry is made of; cortical rates are broadly
+distributed and this kind of homeostasis is a slow stabilizer against silence and runaway, not an
+equalizer, so it now acts only outside a band.
+
+The sharper finding came from the regression it caused. Homeostatic firing alone broke continual
+learning (retention 90.6% → 81.25%, perfect seeds 60% → 0%) while *improving* everything else. A firing
+threshold is a fast variable shared by every memory its neuron takes part in, and it had no warm/cold
+separation — later learning retuned it freely and moved the R activity older concepts had been
+consolidated against. **That was a hole in the stability-plasticity solution of the previous goal, found
+only by removing this scaffold.** Giving intrinsic excitability the same warm→cold consolidation the
+synapses use closed it, and retention went to 100%.
+
+**Audit:** `global_sparse_activity_competition` leaves the remaining list and homeostatic firing plus
+intrinsic-excitability consolidation enter the satisfied list. Remaining scaffolds go from nine to
+**five**. The count had risen 4 → 7 → 9 across the previous three goals; this is the first net decrease,
+and no new global machinery was added to get it. Of the four devices the two-track split disqualifies,
+two are now resolved; exact teacher error and global seed balancing remain.
+
+Cost: R density rises from 0.18 to 0.405. Homeostasis pins a neuron's time-averaged rate, not the
+fraction of neurons active per input — the two are different quantities that agree only on average — so
+locality was bought at the price of a sparsity guarantee. Sparsity is not an objective here (see the top
+of this file), and the assemblies did not become less distinct; the category gap widened. The band and
+control rates are fitted at this scale and were not tested for transfer.
+
 ```bash
-python3 -m unittest -v test_spatial_connectome.py
+python3 -m unittest -v test_spatial_connectome.py test_homeostatic_firing.py
 python3 spatial_connectome.py
 python3 context_branch_probe.py --seeds 20 --rounds 180 --verify
 python3 category_generalization_probe.py --seeds 20 --verify --quiet
