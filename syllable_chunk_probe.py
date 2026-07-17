@@ -627,18 +627,23 @@ def verify_goal(
         "mature_branch_preservation",
         "query_control_from_learned_temporal_activity",
         "local_query_control_prototype_update",
+        "homeostatic_threshold_firing",
+        "intrinsic_excitability_consolidation",
         "no_autograd_or_weight_transport",
     }
     required_scaffolds = {
         "global_teacher_target",
         "global_fact_episode_intersection",
         "global_window_enumeration",
-        "global_sparse_activity_competition",
         "global_seed_balancing",
         "global_output_argmax",
     }
     if not all(audit[item] for item in required_local | required_scaffolds):
         raise AssertionError("incomplete locality audit")
+    # Retired scaffolds must stay retired: activity is no longer ranked into a
+    # per-region quota.
+    if audit["global_sparse_activity_competition"]:
+        raise AssertionError("global activity competition returned")
 
 
 if __name__ == "__main__":

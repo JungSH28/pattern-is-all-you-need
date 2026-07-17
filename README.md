@@ -309,9 +309,9 @@ region maximum, no region sum — so the active count is whatever crosses thresh
 | probe | baseline (global top-k) | homeostatic threshold |
 |---|---:|---:|
 | first QA (boundary-free syllable) | 8/8 | 8/8 |
-| retention after later learning | 7.25/8 | **8/8** |
-| new learning | 3.75/4 | **4/4** |
-| perfect seeds (continual) | 60% | **6/6** |
+| retention after later learning | 7.25/8 | **7.90/8** |
+| new learning | 3.75/4 | **4.00/4** |
+| perfect seeds (continual) | 6/10 | **9/10** |
 | branches recruited | 227 | **96** |
 | answer sentence, exact | 76/80 | **80/80** |
 | answer sentence, perfect seeds | 7/10 | **10/10** |
@@ -336,8 +336,19 @@ learning (retention 90.6% → 81.25%, perfect seeds 60% → 0%) while *improving
 threshold is a fast variable shared by every memory its neuron takes part in, and it had no warm/cold
 separation — later learning retuned it freely and moved the R activity older concepts had been
 consolidated against. **That was a hole in the stability-plasticity solution of the previous goal, found
-only by removing this scaffold.** Giving intrinsic excitability the same warm→cold consolidation the
-synapses use closed it, and retention went to 100%.
+only by removing this scaffold.** Intrinsic excitability now consolidates on the same warm→cold schedule
+the synapses use, and retention recovers.
+
+The first version of that fix was wrong in a way worth recording, because nothing failed when it was.
+Stability was grown on every consolidation cycle for every neuron, regardless of whether that neuron had
+retuned at all — so it saturated during the first fact episode and pinned the thresholds at their
+initial value. Over the whole of training they then moved by 0.0026, which is to say the mechanism was a
+uniform fixed threshold wearing a homeostasis costume. Every probe passed anyway, and passed identically
+with adaptation switched off entirely (24/24 either way), because a frozen per-neuron threshold *is* the
+old fixed threshold. The gains were real but they came from deleting the top-k, not from the replacement.
+Stability now follows each neuron's own retuning, the way an edge's stability follows its own transfer,
+and the thresholds move (0.08 → 0.186, mean shift 0.106, spread 0.013) while retention holds. `test_homeostatic_firing.py`
+pins the movement itself: an inert mechanism must fail a test, not pass every one.
 
 **Audit:** `global_sparse_activity_competition` leaves the remaining list and homeostatic firing plus
 intrinsic-excitability consolidation enter the satisfied list. Remaining scaffolds go from nine to
@@ -345,11 +356,14 @@ intrinsic-excitability consolidation enter the satisfied list. Remaining scaffol
 and no new global machinery was added to get it. Of the four devices the two-track split disqualifies,
 two are now resolved; exact teacher error and global seed balancing remain.
 
-Cost: R density rises from 0.18 to 0.405. Homeostasis pins a neuron's time-averaged rate, not the
+Cost: evoked R density rises from 0.18 to ~0.90. Homeostasis pins a neuron's rate over time, not the
 fraction of neurons active per input — the two are different quantities that agree only on average — so
-locality was bought at the price of a sparsity guarantee. Sparsity is not an objective here (see the top
-of this file), and the assemblies did not become less distinct; the category gap widened. The band and
-control rates are fitted at this scale and were not tested for transfer.
+the top-k's guaranteed per-input sparsity is gone and nothing replaces it. What the branches actually
+read is the query-gated state, and the gate (12.5% of the substrate) is what keeps *that* sparse, at
+0.022 under top-k against 0.111 here. Sparsity is not an objective here (see the top of this file) and
+the assemblies did not become less distinct — the category gap widened — but the honest summary is that
+locality was bought and a sparsity guarantee was sold, not exchanged. The band and control rates are
+fitted at this scale and were not tested for transfer.
 
 ```bash
 python3 -m unittest -v test_spatial_connectome.py test_homeostatic_firing.py

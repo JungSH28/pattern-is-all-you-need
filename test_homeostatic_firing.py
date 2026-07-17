@@ -73,6 +73,36 @@ class ThresholdsBehave(unittest.TestCase):
             counts.add(int((activity[model.region == OUTPUT] > 0).sum()))
         self.assertGreater(len(counts), 1)
 
+    def test_thresholds_actually_move_during_training(self):
+        """The mechanism must not be inert.
+
+        Locking every neuron on every consolidation cycle regardless of what it
+        did froze the thresholds at their initial value after the first fact
+        episode. Everything still passed, because a frozen per-neuron threshold
+        is just the old fixed threshold, so nothing failed and the homeostasis
+        was silently doing nothing. Pin the movement itself.
+        """
+        from category_generalization_probe import CONCEPTS, LABELED
+        from syllable_chunk_probe import fact_episodes, stage_streams
+        from syllable_sentence_dialogue import ConnectomeSentenceDialogue
+        from syllable_sentence_probe import sentence_vocabulary_texts
+
+        model = ConnectomeSentenceDialogue(seed=0)
+        model.register_syllable_vocabulary(sentence_vocabulary_texts())
+        model.register_syllable_output(sentence_vocabulary_texts())
+        model.observe_streams(stage_streams(CONCEPTS, LABELED))
+        model.finalize_chunks()
+        connectome = model.connectome
+        start = connectome.firing_threshold.clone()
+        for episode in fact_episodes(CONCEPTS):
+            model.observe_fact_episode(episode, rounds=30)
+
+        substrate = connectome.region == SUBSTRATE
+        moved = (connectome.firing_threshold - start)[substrate]
+        self.assertGreater(float(moved.abs().mean()), 0.02)
+        # And they must differentiate, not drift as one block.
+        self.assertGreater(float(connectome.firing_threshold[substrate].std()), 0.001)
+
     def test_consolidation_locks_intrinsic_excitability(self):
         model = SpatialConnectome(
             ConnectomeConfig(
@@ -82,19 +112,29 @@ class ThresholdsBehave(unittest.TestCase):
             )
         )
         self.assertTrue(bool((model.intrinsic_plasticity == 1.0).all()))
-        model.warm += 0.5
+        # Locking follows the neuron's own retuning, the way an edge's
+        # stability follows its own transfer. A neuron that never retuned stays
+        # plastic no matter how many cycles pass.
         model.consolidate(cycles=100)
-        self.assertTrue(bool((model.intrinsic_plasticity < 0.01).all()))
+        self.assertTrue(bool((model.intrinsic_plasticity == 1.0).all()))
+        model.threshold_change += 1.0
+        model.consolidate(cycles=100)
+        self.assertTrue(bool((model.intrinsic_plasticity < 0.02).all()))
 
-        # A consolidated neuron no longer retunes, which is what protects an
-        # older concept's R activity from later learning.
-        locked = model.firing_threshold.clone()
+        # A consolidated neuron retunes far more slowly, which is what protects
+        # an older concept's R activity from later learning. Like the synaptic
+        # rule this damps rather than freezes; freezing it outright is what
+        # turned the whole mechanism into a fixed threshold.
         active = torch.ones(model.config.n_units)
-        for _ in range(400):
-            model._adapt_firing_thresholds(active)
-        self.assertTrue(
-            bool(torch.allclose(model.firing_threshold, locked, atol=1e-3))
-        )
+
+        def drift(connectome: SpatialConnectome) -> float:
+            start = connectome.firing_threshold.clone()
+            for _ in range(400):
+                connectome._adapt_firing_thresholds(active)
+            return float((connectome.firing_threshold - start).abs().mean())
+
+        free = _homeostatic()
+        self.assertLess(drift(model), 0.02 * drift(free))
 
 
 if __name__ == "__main__":

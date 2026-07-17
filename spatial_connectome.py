@@ -131,6 +131,8 @@ class SpatialConnectome:
             0.5 * (config.firing_rate_floor + config.firing_rate_ceiling),
         )
         self.threshold_stability = torch.zeros(config.n_units)
+        # How much this neuron has recently retuned; drives its own locking.
+        self.threshold_change = torch.zeros(config.n_units)
 
         self.input_assemblies: dict[str, torch.Tensor] = {}
         self.output_assemblies: dict[str, torch.Tensor] = {}
@@ -740,18 +742,24 @@ class SpatialConnectome:
         answer only to animals gets its threshold dragged down until it answers
         to everything.  Cortical rates are broadly distributed, so the rule only
         acts outside a band and leaves the neuron alone inside it.
+
+        This does not enforce a per-input density and is not a top-k in
+        disguise.  It pins a neuron's rate over time; the fraction of neurons
+        active on any one input is free, and measures far above the band here.
         """
         config = self.config
         fired = (activity > 0).float()
         self.firing_rate += config.firing_rate_trace * (fired - self.firing_rate)
         excess = (self.firing_rate - config.firing_rate_ceiling).clamp_min(0.0)
         deficit = (config.firing_rate_floor - self.firing_rate).clamp_min(0.0)
-        self.firing_threshold += (
+        delta = (
             config.threshold_adaptation_rate
             * self.intrinsic_plasticity
             * (excess - deficit)
         )
+        self.firing_threshold += delta
         self.firing_threshold.clamp_(min=config.minimum_firing_threshold)
+        self.threshold_change += delta.abs()
 
     @property
     def intrinsic_plasticity(self) -> torch.Tensor:
@@ -1357,11 +1365,17 @@ class SpatialConnectome:
             ).clamp_(max=2.0)
             self.warm.mul_(self.config.warm_decay)
             self.stability_tag.mul_(self.config.warm_decay)
-            # A neuron that has taken part in consolidated memory locks its own
-            # excitability, on the same schedule as its synapses.
+            # A neuron locks its own excitability in proportion to how much it
+            # actually retuned, the way an edge's stability follows its own
+            # transfer. Locking every neuron on every cycle regardless of what
+            # it did freezes the thresholds at their initial value after the
+            # first episode, which silently turns homeostasis off.
             self.threshold_stability.add_(
-                self.config.intrinsic_stability_rate * rate
+                self.config.intrinsic_stability_rate
+                * rate
+                * self.threshold_change.abs()
             ).clamp_(max=2.0)
+            self.threshold_change.mul_(self.config.warm_decay)
             for branches in self.output_dendritic_branches.values():
                 for branch in branches:
                     branch.cold = min(
