@@ -30,9 +30,22 @@ class ConnectomeCompositionDialogue(ConnectomeSentenceDialogue):
     is an audited scaffold, not a learned routing.
     """
 
-    def __init__(self, *, seed: int = 0, **kwargs):
+    def __init__(self, *, seed: int = 0, contrast: str = "local", **kwargs):
         kwargs.setdefault("use_replay", False)
         super().__init__(seed=seed, **kwargs)
+        # Three activity regimes for the ablation. "local" is the goal's local
+        # contrast; "topk" is the region-wide rank it replaces; "none" is the
+        # bare homeostatic threshold with no contrast at all.
+        config = self.connectome.config
+        if contrast == "topk":
+            object.__setattr__(config, "homeostatic_threshold", False)
+            object.__setattr__(config, "max_region_density", 0.18)
+            object.__setattr__(config, "max_output_density", 0.10)
+            object.__setattr__(config, "local_contrast", False)
+        elif contrast == "none":
+            object.__setattr__(config, "local_contrast", False)
+        elif contrast != "local":
+            raise ValueError(f"unknown contrast regime: {contrast}")
 
     def entity_patterns(self, text: str) -> tuple[tuple[str, ...], ...]:
         """Every learned concept chunk the question contains."""

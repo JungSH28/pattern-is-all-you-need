@@ -654,6 +654,8 @@ class ConnectomeSyllableDialogue:
                 steps_per_token=2,
                 homeostatic_threshold=True,
                 intrinsic_stability_strength=100.0,
+                local_contrast=True,
+                contrast_strength=0.5,
                 initial_weight=0.08,
                 structural_rewire_mode="local_stochastic",
                 synaptic_stability_strength=100.0,

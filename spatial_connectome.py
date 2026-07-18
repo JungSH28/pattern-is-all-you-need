@@ -57,6 +57,12 @@ class ConnectomeConfig:
     minimum_firing_threshold: float = 0.01
     intrinsic_stability_strength: float = 0.0
     intrinsic_stability_rate: float = 1.0
+    # Local contrast: each neuron is suppressed by its own spatial neighbours,
+    # not by a region-wide rank. This is what recovers per-input sparsity that
+    # a per-neuron threshold cannot, so a doubly-driven unit stands out.
+    local_contrast: bool = False
+    contrast_pool_size: int = 16
+    contrast_strength: float = 0.5
     steps_per_token: int = 3
     position_lr: float = 0.08
     position_lr_decay: float = 0.75
@@ -133,6 +139,7 @@ class SpatialConnectome:
         self.threshold_stability = torch.zeros(config.n_units)
         # How much this neuron has recently retuned; drives its own locking.
         self.threshold_change = torch.zeros(config.n_units)
+        self.contrast_pool = self._make_contrast_pool()
 
         self.input_assemblies: dict[str, torch.Tensor] = {}
         self.output_assemblies: dict[str, torch.Tensor] = {}
@@ -730,6 +737,42 @@ class SpatialConnectome:
                 capped[indices[~mask]] = 0.0
         return capped
 
+    def _make_contrast_pool(self) -> torch.Tensor:
+        """Each substrate neuron's fixed spatial neighbourhood (excluding self).
+
+        The pool is a local group, not the region: divisive/lateral contrast
+        reads only these neighbours, so no rank, maximum or region sum is taken.
+        Built once from 3-D positions, in the spirit of a cortical local circuit.
+        """
+        substrate = torch.where(self.region == SUBSTRATE)[0]
+        size = min(self.config.contrast_pool_size, len(substrate) - 1)
+        pool = torch.full((self.config.n_units, size), -1, dtype=torch.long)
+        positions = self.positions[substrate]
+        distance = torch.cdist(positions, positions)
+        distance.fill_diagonal_(float("inf"))
+        nearest = distance.argsort(dim=1)[:, :size]
+        for row, unit in enumerate(substrate.tolist()):
+            pool[unit] = substrate[nearest[row]]
+        return pool
+
+    def _apply_local_contrast(self, activity: torch.Tensor) -> torch.Tensor:
+        """Suppress a neuron by the strength of its own neighbours.
+
+        A unit driven above its neighbours survives; one that is merely as
+        active as its local pool is cancelled. A doubly-driven unit is above its
+        pool and stands out, which is the contrast the region-wide top-k used to
+        supply. Nothing here ranks or sums the whole region.
+        """
+        substrate = self.region == SUBSTRATE
+        pool = self.contrast_pool
+        has_pool = pool[:, 0] >= 0
+        neighbour_mean = activity[pool.clamp_min(0)].mean(dim=1)
+        suppressed = activity - self.config.contrast_strength * neighbour_mean
+        out = activity.clone()
+        mask = substrate & has_pool
+        out[mask] = F.relu(suppressed[mask])
+        return out
+
     def _adapt_firing_thresholds(self, activity: torch.Tensor) -> None:
         """Each neuron tracks its own rate and retunes its own threshold.
 
@@ -814,6 +857,8 @@ class SpatialConnectome:
             output_units = self.region == OUTPUT
             activity[output_units] = torch.maximum(activity[output_units], teacher[output_units])
         if self.config.homeostatic_threshold:
+            if self.config.local_contrast:
+                activity = self._apply_local_contrast(activity)
             # A neuron cannot fire harder than its own ceiling. This replaces
             # dividing the region by whichever neuron happened to fire most.
             activity = activity.clamp_max(1.0)

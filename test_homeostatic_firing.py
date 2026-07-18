@@ -49,6 +49,58 @@ class FiringPathIsLocal(unittest.TestCase):
         self.assertTrue(audit["intrinsic_excitability_consolidation"])
 
 
+class LocalContrast(unittest.TestCase):
+    def test_contrast_reads_only_a_local_pool(self):
+        source = inspect.getsource(SpatialConnectome._apply_local_contrast)
+        for global_op in ("topk", "argsort", "sort(", ".max()"):
+            self.assertNotIn(global_op, source, msg=global_op)
+
+    def test_each_pool_is_local_not_the_region(self):
+        model = SpatialConnectome(
+            ConnectomeConfig(
+                n_input=64,
+                n_substrate=256,
+                n_output=64,
+                homeostatic_threshold=True,
+                local_contrast=True,
+                contrast_pool_size=16,
+                seed=0,
+            )
+        )
+        substrate = int((model.region == SUBSTRATE).sum())
+        pools = model.contrast_pool[model.region == SUBSTRATE]
+        self.assertEqual(pools.shape[1], 16)
+        self.assertLess(pools.shape[1], substrate)
+        # No neuron is in its own pool, and every pool entry is a substrate unit.
+        for unit in torch.where(model.region == SUBSTRATE)[0].tolist():
+            neighbours = model.contrast_pool[unit]
+            self.assertNotIn(unit, neighbours.tolist())
+            self.assertTrue(bool((model.region[neighbours] == SUBSTRATE).all()))
+
+    def test_a_unit_above_its_pool_survives_and_a_flat_field_is_cancelled(self):
+        model = SpatialConnectome(
+            ConnectomeConfig(
+                n_input=64,
+                n_substrate=256,
+                n_output=64,
+                homeostatic_threshold=True,
+                local_contrast=True,
+                contrast_strength=1.0,
+                seed=0,
+            )
+        )
+        substrate = model.region == SUBSTRATE
+        flat = torch.zeros(model.config.n_units)
+        flat[substrate] = 0.5
+        # Everything equal to its neighbours is suppressed.
+        self.assertEqual(int((model._apply_local_contrast(flat)[substrate] > 0).sum()), 0)
+        # One unit driven above its pool stands out.
+        peak = flat.clone()
+        target = torch.where(substrate)[0][0]
+        peak[target] = 2.0
+        self.assertGreater(float(model._apply_local_contrast(peak)[target]), 0.0)
+
+
 class ThresholdsBehave(unittest.TestCase):
     def test_runaway_and_silent_neurons_retune_in_opposite_directions(self):
         model = _homeostatic()

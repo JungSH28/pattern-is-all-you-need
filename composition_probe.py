@@ -119,8 +119,9 @@ def _train(
     pair_rounds: int = 6,
     concepts: Mapping[str, Sequence[str]] = CONCEPTS,
     omit: str | None = None,
+    contrast: str = "local",
 ) -> ConnectomeCompositionDialogue:
-    model = ConnectomeCompositionDialogue(seed=seed)
+    model = ConnectomeCompositionDialogue(seed=seed, contrast=contrast)
     model.register_syllable_vocabulary(composition_vocabulary_texts())
     model.register_syllable_output(composition_vocabulary_texts())
     model.observe_streams(stage_streams(concepts, LABELED))
@@ -144,8 +145,8 @@ def _train(
     return model
 
 
-def result(seed: int) -> dict[str, object]:
-    model = _train(seed)
+def result(seed: int, *, contrast: str = "local") -> dict[str, object]:
+    model = _train(seed, contrast=contrast)
     examples = heldout_pairs()
     generated = [model.generate(item.question) for item in examples]
     correct = [judge(item, text) for item, text in zip(examples, generated)]
@@ -215,21 +216,38 @@ def main() -> None:
     parser.add_argument("--seeds", type=int, default=5)
     parser.add_argument("--partner-seeds", type=int, default=3)
     arguments = parser.parse_args()
-    results = [result(seed) for seed in range(arguments.seeds)]
-    print(f"\n=== composition, bio single connectome ({arguments.seeds} seeds) ===")
-    for key, total in (
-        ("correct", "total"),
-        ("same_category", "same_total"),
-        ("cross_category", "cross_total"),
-        ("retrieval_answer_on_cross_pairs", "retrieval_total"),
-        ("single_fact_retrieval", "single_fact_total"),
-    ):
-        got = sum(int(item[key]) for item in results)
-        out = sum(int(item[total]) for item in results)
-        print(f"  {key:36s} {got:3d}/{out}")
-    print("  samples (question -> generated | target):")
-    for question, generated, target in results[0]["samples"]:
-        print(f"    {question} -> {generated} | {target}")
+
+    # The contribution accounting: the local-contrast regime this goal adds,
+    # the fixed top-k it must match without a global rank, and the bare
+    # homeostatic threshold with no contrast at all.
+    print(f"\n=== composition activity-regime ablation ({arguments.seeds} seeds) ===")
+    print(f"  {'regime':18s} {'same':>7} {'  animal':>8} {' vehicle':>8} {'cross':>7} {'retr/cross':>11}")
+    for regime in ("local", "topk", "none"):
+        rows = [result(seed, contrast=regime) for seed in range(arguments.seeds)]
+        same = sum(int(r["same_category"]) for r in rows)
+        same_t = sum(int(r["same_total"]) for r in rows)
+        animal = sum(
+            judge(item, _train(seed, contrast=regime).generate(item.question))
+            for seed in range(arguments.seeds)
+            for item in heldout_pairs()
+            if item.shared == "털"
+        )
+        animal_t = arguments.seeds * sum(1 for i in heldout_pairs() if i.shared == "털")
+        vehicle = sum(
+            judge(item, _train(seed, contrast=regime).generate(item.question))
+            for seed in range(arguments.seeds)
+            for item in heldout_pairs()
+            if item.shared == "금속"
+        )
+        vehicle_t = arguments.seeds * sum(1 for i in heldout_pairs() if i.shared == "금속")
+        cross = sum(int(r["cross_category"]) for r in rows)
+        cross_t = sum(int(r["cross_total"]) for r in rows)
+        retr = sum(int(r["retrieval_answer_on_cross_pairs"]) for r in rows)
+        label = {"local": "local contrast", "topk": "fixed top-k", "none": "no contrast"}[regime]
+        print(
+            f"  {label:18s} {same:3d}/{same_t:<3d} {animal:4d}/{animal_t:<3d}"
+            f" {vehicle:4d}/{vehicle_t:<3d} {cross:3d}/{cross_t:<3d} {retr:5d}/{cross_t}"
+        )
 
     print("\n  ablation -- remove one composition target (wolf+truck, cross):")
     collapsed = 0
