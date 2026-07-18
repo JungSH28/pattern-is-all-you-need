@@ -396,6 +396,31 @@ lock trades one side for the other. The way forward is a local contrast mechanis
 divisive normalization over a local pool) doing what top-k did, without a global rank; that is the
 long-deferred "revive the dynamics" axis.
 
+**Local contrast opens composition** (`composition_probe.py`, three-regime ablation). That local contrast
+is now built: each substrate neuron is suppressed by the mean activity of its own fixed neighbourhood
+(16 nearest by 3-D position), so a doubly-driven unit stands above its pool and survives while a unit
+merely as active as its neighbours is cancelled — the top-k's contrast, done with no rank, no maximum, no
+region sum. Held-out "what do these two have in common", 5 seeds:
+
+| regime | same | animal | vehicle | cross |
+|---|---:|---:|---:|---:|
+| **local contrast** | **8/10** | 5/5 | **3/5** | 15/20 |
+| fixed top-k | 5/10 | 3/5 | 2/5 | 14/20 |
+| no contrast | 5/10 | 5/5 | 0/5 | 18/20 |
+
+Local contrast beats both the region-wide top-k it replaces and the bare threshold on same-category
+pairs, and it is the only regime that opens vehicles — the case #34 could not do at all. Removing one
+target still collapses the answer 3/3 (drop truck's facts and wolf+truck stops answering "nothing" and
+claims wolf's own property), so the result depends on both assemblies. The honest caveat: no-contrast's
+higher cross score (18/20) is the "nothing in common" bias, not a capability — its same is 5/10, half of
+it animal luck — and turning composition on costs a few cross pairs (15/20).
+
+Lower bounds hold: #31 `--verify` passes (retained 7.80/8, later 3.90/4), #32 stays 80/80 with 10/10
+perfect, and `global_sparse_activity_competition` stays retired. The cost is one seed: the contrast
+strength vehicles need (0.5) drops seed 0's continual score by one new-learning item, where 0.4 keeps
+seed 0 perfect but opens no vehicles. It is a real tradeoff, recorded rather than hidden, and the
+end-to-end test now checks several seeds in aggregate instead of that one.
+
 ```bash
 python3 composition_probe.py --seeds 5 --partner-seeds 3
 python3 -m unittest -v test_spatial_connectome.py test_homeostatic_firing.py
