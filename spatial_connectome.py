@@ -527,6 +527,39 @@ class SpatialConnectome:
             for branch in branches:
                 branch.warm = 0.0
 
+    @property
+    def recurrent_edge(self) -> torch.Tensor:
+        return (self.region[self.src] == SUBSTRATE) & (
+            self.region[self.dst] == SUBSTRATE
+        )
+
+    def reset_recurrent(self) -> None:
+        """Silence the developmental R->R weights so maintenance is learned.
+
+        Random recurrence self-amplifies any input into a full-region fixed
+        point (the v3-v12 explosion). Working memory needs the recurrence to
+        carry one assembly, not everything, so it starts from zero and is
+        written only by co-active pairs.
+        """
+        edge = self.recurrent_edge
+        self.cold[edge] = 0.0
+        self.warm[edge] = 0.0
+
+    def hold_assembly(self, state: torch.Tensor, *, rate: float = 1.2) -> None:
+        """Strengthen R->R edges between units co-active in this state.
+
+        Purely local: an edge changes only from its own pre and post activity,
+        no error and no transported weight. The strengthened loop lets the
+        assembly re-excite itself once the input is gone, while local contrast
+        keeps every other unit down -- persistent activity from recurrent
+        excitation balanced by lateral inhibition.
+        """
+        edge = self.recurrent_edge
+        active = (state > 0).float()
+        self.cold[edge] = (
+            self.cold[edge] + rate * active[self.src[edge]] * active[self.dst[edge]]
+        ).clamp(max=3.0)
+
     def _dendritic_contacts(
         self,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
